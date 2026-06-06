@@ -1,4 +1,60 @@
 const { supabaseAdmin } = require("../config/supabase");
+const { logActivity } = require("./activityLogController");
+
+const getVendorFields = (body) => {
+  const fields = {};
+  if (body.vendor_name !== undefined) fields.vendor_name = body.vendor_name;
+  else if (body.name !== undefined) fields.vendor_name = body.name;
+
+  if (body.service_type !== undefined) fields.service_type = body.service_type;
+  else if (body.category !== undefined) fields.service_type = body.category;
+
+  if (body.phone !== undefined) fields.phone = body.phone;
+
+  if (body.alternate_phone !== undefined) fields.alternate_phone = body.alternate_phone;
+  else if (body.alternatePhone !== undefined) fields.alternate_phone = body.alternatePhone;
+
+  if (body.email !== undefined) fields.email = body.email;
+  if (body.address !== undefined) fields.address = body.address;
+  if (body.city !== undefined) fields.city = body.city;
+  if (body.state !== undefined) fields.state = body.state;
+
+  if (body.gst_number !== undefined) fields.gst_number = body.gst_number;
+  else if (body.gstNumber !== undefined) fields.gst_number = body.gstNumber;
+
+  if (body.bank_name !== undefined) fields.bank_name = body.bank_name;
+  else if (body.bankName !== undefined) fields.bank_name = body.bankName;
+
+  if (body.account_number !== undefined) fields.account_number = body.account_number;
+  else if (body.accountNumber !== undefined) fields.account_number = body.accountNumber;
+
+  if (body.ifsc_code !== undefined) fields.ifsc_code = body.ifsc_code;
+  else if (body.ifscCode !== undefined) fields.ifsc_code = body.ifscCode;
+
+  if (body.upi_id !== undefined) fields.upi_id = body.upi_id;
+  else if (body.upiId !== undefined) fields.upi_id = body.upiId;
+
+  if (body.contact_person_name !== undefined) fields.contact_person_name = body.contact_person_name;
+  else if (body.contactPersonName !== undefined) fields.contact_person_name = body.contactPersonName;
+
+  if (body.contact_person_phone !== undefined) fields.contact_person_phone = body.contact_person_phone;
+  else if (body.contactPersonPhone !== undefined) fields.contact_person_phone = body.contactPersonPhone;
+
+  if (body.rating !== undefined) fields.rating = body.rating;
+  if (body.rate !== undefined) {
+    fields.rate = body.rate;
+    if (fields.rating === undefined) fields.rating = body.rate;
+  }
+  if (body.status !== undefined) fields.status = body.status;
+
+  if (body.tags !== undefined) {
+    fields.tags = Array.isArray(body.tags) ? body.tags : [];
+  }
+
+  if (body.notes !== undefined) fields.notes = body.notes;
+
+  return fields;
+};
 
 /* ============================================================
    CREATE VENDOR
@@ -6,21 +62,32 @@ const { supabaseAdmin } = require("../config/supabase");
 const createVendor = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-    const { vendor_name, service_type, phone, email, address, notes, rate } = req.body;
+    const fields = getVendorFields(req.body);
+    const { vendor_name, service_type } = fields;
 
     if (!vendor_name || !service_type) {
-      return res.status(400).json({ message: "vendor_name and service_type are required" });
+      return res.status(400).json({ message: "vendor_name (or name) and service_type (or category) are required" });
     }
-
-    const validServiceTypes = ["catering", "decoration", "photography", "music", "lighting", "transport", "other"];
 
     const { data, error } = await supabaseAdmin
       .from("vendors")
-      .insert([{ hall_id, vendor_name, service_type, phone, email, address, notes, rate }])
+      .insert([{ ...fields, hall_id }])
       .select()
       .single();
 
     if (error) return res.status(500).json({ message: error.message });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "vendor.created",
+      entity_type: "vendor",
+      entity_id: data.id,
+      description: `Added vendor profile for ${vendor_name} (${service_type})`,
+      metadata: { service_type },
+    });
 
     res.status(201).json({ message: "Vendor created successfully", data });
   } catch (err) {
@@ -87,28 +154,31 @@ const updateVendor = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
-    const { vendor_name, service_type, phone, email, address, notes, rate } = req.body;
+    const fields = getVendorFields(req.body);
 
     const { data: existing } = await supabaseAdmin
       .from("vendors")
-      .select("id")
+      .select("id, vendor_name")
       .eq("id", id)
       .eq("hall_id", hall_id)
       .maybeSingle();
 
     if (!existing) return res.status(404).json({ message: "Vendor not found in your hall" });
 
-    const updates = {};
-    if (vendor_name !== undefined) updates.vendor_name = vendor_name;
-    if (service_type !== undefined) updates.service_type = service_type;
-    if (phone !== undefined) updates.phone = phone;
-    if (email !== undefined) updates.email = email;
-    if (address !== undefined) updates.address = address;
-    if (notes !== undefined) updates.notes = notes;
-    if (rate !== undefined) updates.rate = rate;
-
-    const { error } = await supabaseAdmin.from("vendors").update(updates).eq("id", id);
+    const { error } = await supabaseAdmin.from("vendors").update(fields).eq("id", id);
     if (error) return res.status(500).json({ message: error.message });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "vendor.updated",
+      entity_type: "vendor",
+      entity_id: id,
+      description: `Updated vendor details for ${existing.vendor_name}`,
+      metadata: { updated_fields: Object.keys(fields) },
+    });
 
     res.json({ message: "Vendor updated successfully" });
   } catch (err) {
@@ -127,7 +197,7 @@ const deleteVendor = async (req, res) => {
 
     const { data: existing } = await supabaseAdmin
       .from("vendors")
-      .select("id")
+      .select("id, vendor_name")
       .eq("id", id)
       .eq("hall_id", hall_id)
       .maybeSingle();
@@ -136,6 +206,17 @@ const deleteVendor = async (req, res) => {
 
     const { error } = await supabaseAdmin.from("vendors").delete().eq("id", id);
     if (error) return res.status(500).json({ message: error.message });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "vendor.deleted",
+      entity_type: "vendor",
+      entity_id: id,
+      description: `Removed vendor profile for ${existing.vendor_name}`,
+    });
 
     res.json({ message: "Vendor deleted successfully" });
   } catch (err) {

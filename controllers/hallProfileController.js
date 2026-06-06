@@ -1,4 +1,99 @@
 const { supabaseAdmin } = require("../config/supabase");
+const { logActivity } = require("./activityLogController");
+
+const mapProfileBodyToDb = (body) => {
+  const fields = {};
+  if (body.hall_name !== undefined) fields.hall_name = body.hall_name;
+  else if (body.hallName !== undefined) fields.hall_name = body.hallName;
+
+  if (body.tagline !== undefined) fields.tagline = body.tagline;
+  if (body.description !== undefined) fields.description = body.description;
+  if (body.phone !== undefined) fields.phone = body.phone;
+
+  if (body.alternate_phone !== undefined) fields.alternate_phone = body.alternate_phone;
+  else if (body.alternatePhone !== undefined) fields.alternate_phone = body.alternatePhone;
+
+  if (body.email !== undefined) fields.email = body.email;
+  if (body.website !== undefined) fields.website = body.website;
+  if (body.address !== undefined) fields.address = body.address;
+  if (body.city !== undefined) fields.city = body.city;
+  if (body.state !== undefined) fields.state = body.state;
+  if (body.pincode !== undefined) fields.pincode = body.pincode;
+
+  if (body.google_maps_link !== undefined) fields.google_maps_link = body.google_maps_link;
+  else if (body.googleMapsLink !== undefined) fields.google_maps_link = body.googleMapsLink;
+
+  if (body.capacity_min !== undefined) fields.capacity_min = body.capacity_min;
+  if (body.capacity_max !== undefined) fields.capacity_max = body.capacity_max;
+
+  if (body.established_year !== undefined) fields.established_year = body.established_year;
+  else if (body.establishedYear !== undefined) fields.established_year = body.establishedYear;
+
+  if (body.amenities !== undefined) fields.amenities = body.amenities;
+  if (body.event_types !== undefined) fields.event_types = body.event_types;
+
+  // New frontend fields
+  if (body.owner_name !== undefined) fields.owner_name = body.owner_name;
+  else if (body.ownerName !== undefined) fields.owner_name = body.ownerName;
+
+  if (body.country !== undefined) fields.country = body.country;
+
+  if (body.total_capacity !== undefined) fields.total_capacity = body.total_capacity;
+  else if (body.totalCapacity !== undefined) fields.total_capacity = body.totalCapacity;
+
+  if (body.gst_number !== undefined) fields.gst_number = body.gst_number;
+  else if (body.gstNumber !== undefined) fields.gst_number = body.gstNumber;
+
+  if (body.pan_number !== undefined) fields.pan_number = body.pan_number;
+  else if (body.panNumber !== undefined) fields.pan_number = body.panNumber;
+
+  if (body.bank_name !== undefined) fields.bank_name = body.bank_name;
+  else if (body.bankName !== undefined) fields.bank_name = body.bankName;
+
+  if (body.account_number !== undefined) fields.account_number = body.account_number;
+  else if (body.accountNumber !== undefined) fields.account_number = body.accountNumber;
+
+  if (body.ifsc_code !== undefined) fields.ifsc_code = body.ifsc_code;
+  else if (body.ifscCode !== undefined) fields.ifsc_code = body.ifscCode;
+
+  if (body.upi_id !== undefined) fields.upi_id = body.upi_id;
+  else if (body.upiId !== undefined) fields.upi_id = body.upiId;
+
+  if (body.hall_sections !== undefined) fields.hall_sections = body.hall_sections;
+  else if (body.hallSections !== undefined) fields.hall_sections = body.hallSections;
+
+  return fields;
+};
+
+const formatDbProfileToFrontend = (data) => {
+  if (!data) return null;
+  return {
+    ...data,
+    hallName: data.hall_name,
+    ownerName: data.owner_name || "",
+    phone: data.phone,
+    alternatePhone: data.alternate_phone || "",
+    email: data.email,
+    website: data.website || "",
+    address: data.address,
+    city: data.city,
+    state: data.state,
+    pincode: data.pincode,
+    country: data.country || "India",
+    description: data.description || "",
+    establishedYear: data.established_year,
+    totalCapacity: data.total_capacity || data.capacity_max || 0,
+    hallSections: data.hall_sections || [],
+    logoUrl: data.logo_url,
+    coverImageUrl: data.cover_image_url,
+    gstNumber: data.gst_number || "",
+    panNumber: data.pan_number || "",
+    bankName: data.bank_name || "",
+    accountNumber: data.account_number || "",
+    ifscCode: data.ifsc_code || "",
+    upiId: data.upi_id || "",
+  };
+};
 
 /* ============================================================
    GET HALL PROFILE
@@ -24,10 +119,18 @@ const getHallProfile = async (req, res) => {
         .single();
 
       if (hallErr) return res.status(404).json({ message: "Hall not found" });
-      return res.json({ ...hall, profile_complete: false });
+      return res.json({
+        ...hall,
+        hallName: hall.hall_name,
+        phone: hall.phone,
+        email: hall.email,
+        address: hall.address,
+        city: hall.city,
+        profile_complete: false
+      });
     }
 
-    res.json({ ...data, profile_complete: true });
+    res.json({ ...formatDbProfileToFrontend(data), profile_complete: true });
   } catch (err) {
     console.error("getHallProfile error:", err);
     res.status(500).json({ message: "Server error" });
@@ -41,53 +144,13 @@ const getHallProfile = async (req, res) => {
 const upsertHallProfile = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-
-    const {
-      hall_name,
-      tagline,
-      description,
-      phone,
-      alternate_phone,
-      email,
-      website,
-      address,
-      city,
-      state,
-      pincode,
-      google_maps_link,
-      capacity_min,
-      capacity_max,
-      established_year,
-      amenities,        // array e.g. ["AC", "Parking", "Catering"]
-      event_types,      // array e.g. ["Wedding", "Reception", "Birthday"]
-    } = req.body;
+    const profileFields = mapProfileBodyToDb(req.body);
 
     const profileData = {
+      ...profileFields,
       hall_id,
-      hall_name,
-      tagline,
-      description,
-      phone,
-      alternate_phone,
-      email,
-      website,
-      address,
-      city,
-      state,
-      pincode,
-      google_maps_link,
-      capacity_min,
-      capacity_max,
-      established_year,
-      amenities: amenities || [],
-      event_types: event_types || [],
       updated_at: new Date().toISOString(),
     };
-
-    // Remove undefined keys so we don't overwrite with null
-    Object.keys(profileData).forEach(
-      (k) => profileData[k] === undefined && delete profileData[k]
-    );
 
     const { data, error } = await supabaseAdmin
       .from("hall_profiles")
@@ -99,11 +162,11 @@ const upsertHallProfile = async (req, res) => {
 
     // Also sync hall_name and phone back to marriage_halls for consistency
     const hallUpdates = {};
-    if (hall_name) hallUpdates.hall_name = hall_name;
-    if (phone) hallUpdates.phone = phone;
-    if (email) hallUpdates.email = email;
-    if (city) hallUpdates.city = city;
-    if (address) hallUpdates.address = address;
+    if (profileFields.hall_name) hallUpdates.hall_name = profileFields.hall_name;
+    if (profileFields.phone) hallUpdates.phone = profileFields.phone;
+    if (profileFields.email) hallUpdates.email = profileFields.email;
+    if (profileFields.city) hallUpdates.city = profileFields.city;
+    if (profileFields.address) hallUpdates.address = profileFields.address;
 
     if (Object.keys(hallUpdates).length > 0) {
       await supabaseAdmin
@@ -112,7 +175,19 @@ const upsertHallProfile = async (req, res) => {
         .eq("id", hall_id);
     }
 
-    res.json({ message: "Hall profile saved successfully", data });
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "profile.updated",
+      entity_type: "profile",
+      entity_id: hall_id,
+      description: `Updated marriage hall profile details`,
+      metadata: { updated_fields: Object.keys(profileFields) },
+    });
+
+    res.json({ message: "Hall profile saved successfully", data: formatDbProfileToFrontend(data) });
   } catch (err) {
     console.error("upsertHallProfile error:", err);
     res.status(500).json({ message: "Server error" });

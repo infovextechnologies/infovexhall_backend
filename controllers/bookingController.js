@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../config/supabase");
+const { logActivity } = require("./activityLogController");
 
 /* ============================================================
    AVAILABILITY CHECK (reusable helper)
@@ -68,6 +69,9 @@ const createBooking = async (req, res) => {
       total_amount,
       advance_amount,
       notes,
+      hall_section,
+      guest_count,
+      discount_amount,
     } = req.body;
 
     if (!customer_id || !start_date || !end_date) {
@@ -135,6 +139,9 @@ const createBooking = async (req, res) => {
         advance_amount: advance_amount || 0,
         status: "confirmed",
         notes,
+        hall_section,
+        guest_count,
+        discount_amount: discount_amount || 0,
       }])
       .select(`
         *,
@@ -160,11 +167,23 @@ const createBooking = async (req, res) => {
         hall_id,
         booking_id: data.id,
         amount: advance_amount,
-        payment_method: "advance",
+        payment_method: "upi", // default or map
         payment_date: today,
         notes: "Advance payment at booking",
       }]);
     }
+
+    // ---- Log Activity ----
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "booking.created",
+      entity_type: "booking",
+      entity_id: data.id,
+      description: `Created booking for ${customer.customer_name} - ${event_name || event_type || "Event"}`,
+      metadata: { total_amount, start_date, end_date, hall_section },
+    });
 
     res.status(201).json({ message: "Booking created successfully", data });
   } catch (err) {
@@ -276,6 +295,9 @@ const updateBooking = async (req, res) => {
       total_amount,
       status,
       notes,
+      hall_section,
+      guest_count,
+      discount_amount,
     } = req.body;
 
     const { data: existing } = await supabaseAdmin
@@ -317,6 +339,9 @@ const updateBooking = async (req, res) => {
     if (total_amount !== undefined) updates.total_amount = total_amount;
     if (status !== undefined) updates.status = status;
     if (notes !== undefined) updates.notes = notes;
+    if (hall_section !== undefined) updates.hall_section = hall_section;
+    if (guest_count !== undefined) updates.guest_count = guest_count;
+    if (discount_amount !== undefined) updates.discount_amount = discount_amount;
 
     const { error } = await supabaseAdmin.from("bookings").update(updates).eq("id", id);
     if (error) return res.status(500).json({ message: error.message });
@@ -328,6 +353,18 @@ const updateBooking = async (req, res) => {
       if (event_name) calendarUpdate.event_title = event_name;
       await supabaseAdmin.from("events").update(calendarUpdate).eq("booking_id", id);
     }
+
+    // ---- Log Activity ----
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "booking.updated",
+      entity_type: "booking",
+      entity_id: id,
+      description: `Updated booking #${id.slice(0, 8).toUpperCase()} details`,
+      metadata: { updated_fields: Object.keys(updates) },
+    });
 
     res.json({ message: "Booking updated successfully" });
   } catch (err) {
@@ -360,6 +397,17 @@ const cancelBooking = async (req, res) => {
       .eq("id", id);
 
     if (error) return res.status(500).json({ message: error.message });
+
+    // ---- Log Activity ----
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "booking.cancelled",
+      entity_type: "booking",
+      entity_id: id,
+      description: `Cancelled booking #${id.slice(0, 8).toUpperCase()}`,
+    });
 
     res.json({ message: "Booking cancelled successfully" });
   } catch (err) {

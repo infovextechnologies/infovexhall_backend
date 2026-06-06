@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../config/supabase");
+const { logActivity } = require("./activityLogController");
 
 /* ============================================================
    ADD PAYMENT
@@ -67,6 +68,18 @@ const createPayment = async (req, res) => {
       message: "Payment recorded successfully",
       data,
       remaining_balance: remaining - amount,
+    });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "payment.added",
+      entity_type: "payment",
+      entity_id: data.id,
+      description: `Recorded payment of ₹${amount} via ${payment_method || "cash"} for booking #${booking_id.slice(0, 8).toUpperCase()}`,
+      metadata: { booking_id, amount, payment_method },
     });
   } catch (err) {
     console.error("createPayment error:", err);
@@ -202,6 +215,18 @@ const deletePayment = async (req, res) => {
     }
 
     res.json({ message: "Payment deleted successfully" });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "payment.deleted",
+      entity_type: "payment",
+      entity_id: id,
+      description: `Deleted payment of ₹${existing.amount} for booking #${existing.booking_id.slice(0, 8).toUpperCase()}`,
+      metadata: { booking_id: existing.booking_id, amount: existing.amount },
+    });
   } catch (err) {
     console.error("deletePayment error:", err);
     res.status(500).json({ message: "Server error" });
