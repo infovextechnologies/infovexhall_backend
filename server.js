@@ -35,17 +35,31 @@ app.use(express.json());
 app.use(helmet());
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "https://hallsondesk.netlify.app",
+  "https://infovexweddinghallcrm.netlify.app",
+  "https://hallflow2.netlify.app"
+];
+
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "https://hallsondesk.netlify.app",
-    "https://infovexweddinghallcrm.netlify.app",
-    "https://hallflow2.netlify.app"
-  ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+    if (!origin) return callback(null, true);
+    
+    // Match allowed list or any Vercel deployment URL
+    if (allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
+      return callback(null, true);
+    }
+    
+    return callback(new Error("Not allowed by CORS"), false);
+  },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Active-Hall-ID", "X-Product-Context"],
 }));
 
 
