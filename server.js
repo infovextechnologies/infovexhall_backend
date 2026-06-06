@@ -38,11 +38,8 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
-  "http://localhost:3002",
-  "http://localhost:5173",
-  "http://localhost:5174",
   "https://hallsondesk.netlify.app",
-  "https://infovexweddinghallcrm.netlify.app",
+  "https://hallsondesk.vercel.app",
   "https://hallflow2.netlify.app"
 ];
 
