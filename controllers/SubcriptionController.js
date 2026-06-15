@@ -1,4 +1,5 @@
 const { supabaseAdmin } = require("../config/supabase");
+const { logActivity } = require("./activityLogController");
 
 /* Get subscription for a hall */
 const getSubscription = async (req, res) => {
@@ -14,6 +15,11 @@ const getSubscription = async (req, res) => {
 
   if (error) return res.status(500).json({ message: error.message });
   if (!data) return res.status(404).json({ message: "No subscription found" });
+
+  const today = new Date().toISOString().split("T")[0];
+  if ((data.status === "active" || data.status === "trial") && data.end_date < today) {
+    data.status = "expired";
+  }
 
   res.json(data);
 };
@@ -73,4 +79,48 @@ const changePackage = async (req, res) => {
   res.json({ message: "Package changed successfully" });
 };
 
-module.exports = { getSubscription, renewSubscription, changePackage };
+/* Request package change / renewal (Owner submission) */
+const requestSubscriptionChange = async (req, res) => {
+  try {
+    const hall_id = req.user.hall_id;
+    const { package_id, request_type = "upgrade", notes = "" } = req.body;
+
+    let packageName = "Renewal";
+    if (package_id) {
+      const { data: pkg } = await supabaseAdmin
+        .from("packages")
+        .select("name")
+        .eq("id", package_id)
+        .maybeSingle();
+      if (pkg) packageName = pkg.name;
+    }
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "subscription.request_change",
+      entity_type: "subscription",
+      description: `Requested plan ${request_type} to ${packageName}. Notes: ${notes}`,
+      metadata: { package_id, request_type, notes },
+    });
+
+    // Create notification for operators
+    await supabaseAdmin.from("notifications").insert([{
+      hall_id,
+      type: "subscription_request",
+      title: "Plan Request Submitted",
+      message: `Request for ${request_type} to ${packageName} has been logged. Support will contact you shortly.`,
+      entity_type: "subscription",
+      is_read: false,
+    }]);
+
+    res.json({ message: "Subscription request submitted successfully. Our team will contact you shortly." });
+  } catch (err) {
+    console.error("requestSubscriptionChange error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+module.exports = { getSubscription, renewSubscription, changePackage, requestSubscriptionChange };

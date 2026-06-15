@@ -28,6 +28,7 @@ const invoiceRoutes = require("./routes/invoiceRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const activityLogRoutes = require("./routes/activityLogRoutes");
 const multiHallRoutes = require("./routes/multiHallRoutes");
+const supportRoutes = require("./routes/supportRoutes");
 
 const app = express();
 
@@ -43,7 +44,9 @@ const allowedOrigins = [
   "http://localhost:5174",
   "https://hallsondesk.netlify.app",
   "https://infovexweddinghallcrm.netlify.app",
-  "https://hallflow2.netlify.app"
+  "https://hallflow2.netlify.app",
+  "https://hallsondesk.in",
+  "https://dashboard.hallsondesk.in"
 ];
 
 app.use(cors({
@@ -84,6 +87,7 @@ app.use("/invoices", invoiceRoutes);
 app.use("/notifications", notificationRoutes);
 app.use("/activity-logs",  activityLogRoutes);
 app.use("/multihall",      multiHallRoutes);
+app.use("/support",        supportRoutes);
 
 // ---- Health check ----
 app.get("/health", (req, res) => {

@@ -5,7 +5,7 @@ const { supabaseAdmin } = require("../config/supabase");
    ============================================================ */
 const createCustomer = async (req, res) => {
   try {
-    const { customer_name, phone, email, address, notes } = req.body;
+    const { customer_name, phone, email, address, notes, city, state, gst_number, company_name, vip_status } = req.body;
     const hall_id = req.user.hall_id;
 
     if (!customer_name) {
@@ -28,7 +28,19 @@ const createCustomer = async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from("customers")
-      .insert([{ hall_id, customer_name, phone, email, address, notes }])
+      .insert([{ 
+        hall_id, 
+        customer_name, 
+        phone, 
+        email, 
+        address, 
+        notes,
+        city,
+        state,
+        gst_number,
+        company_name,
+        vip_status: vip_status ?? false
+      }])
       .select()
       .single();
 
@@ -58,7 +70,7 @@ const getCustomers = async (req, res) => {
       .range(offset, offset + parseInt(limit) - 1);
 
     if (search) {
-      query = query.or(`customer_name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%`);
+      query = query.or(`customer_name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%,company_name.ilike.%${search}%,gst_number.ilike.%${search}%,city.ilike.%${search}%`);
     }
 
     const { data, error, count } = await query;
@@ -118,7 +130,7 @@ const updateCustomer = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
-    const { customer_name, phone, email, address, notes } = req.body;
+    const { customer_name, phone, email, address, notes, city, state, gst_number, company_name, vip_status } = req.body;
 
     const { data: existing } = await supabaseAdmin
       .from("customers")
@@ -131,7 +143,18 @@ const updateCustomer = async (req, res) => {
 
     const { error } = await supabaseAdmin
       .from("customers")
-      .update({ customer_name, phone, email, address, notes })
+      .update({ 
+        customer_name, 
+        phone, 
+        email, 
+        address, 
+        notes,
+        city,
+        state,
+        gst_number,
+        company_name,
+        vip_status
+      })
       .eq("id", id);
 
     if (error) return res.status(500).json({ message: error.message });
@@ -183,4 +206,57 @@ const deleteCustomer = async (req, res) => {
   }
 };
 
-module.exports = { createCustomer, getCustomers, getCustomerById, updateCustomer, deleteCustomer };
+/* ============================================================
+   LOG CUSTOMER CRM INTERACTION
+   ============================================================ */
+const logCustomerInteraction = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, notes } = req.body;
+    const hall_id = req.user.hall_id;
+    const user_id = req.user.id;
+    const user_name = req.user.name || "Staff";
+
+    if (!type || !notes) {
+      return res.status(400).json({ message: "type and notes are required" });
+    }
+
+    const { data: customer } = await supabaseAdmin
+      .from("customers")
+      .select("customer_name")
+      .eq("id", id)
+      .eq("hall_id", hall_id)
+      .maybeSingle();
+
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found in your hall" });
+    }
+
+    // Log this action using the activity logger helper
+    const { logActivity } = require("./activityLogController");
+    await logActivity({
+      hall_id,
+      user_id,
+      user_name,
+      action: "customer.interaction",
+      entity_type: "customer",
+      entity_id: id,
+      description: `Logged CRM interaction (${type}): ${notes}`,
+      metadata: { type, notes, customer_name: customer.customer_name },
+    });
+
+    res.status(201).json({ message: "Interaction logged successfully" });
+  } catch (err) {
+    console.error("logCustomerInteraction error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+module.exports = { 
+  createCustomer, 
+  getCustomers, 
+  getCustomerById, 
+  updateCustomer, 
+  deleteCustomer,
+  logCustomerInteraction
+};

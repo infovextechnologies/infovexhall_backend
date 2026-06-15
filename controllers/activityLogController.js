@@ -65,7 +65,7 @@ const getActivityLogs = async (req, res) => {
 
     let query = supabaseAdmin
       .from("activity_logs")
-      .select("*", { count: "exact" })
+      .select("*, users(name)", { count: "exact" })
       .eq("hall_id", hall_id)
       .order("created_at", { ascending: false })
       .range(offset, offset + parseInt(limit) - 1);
@@ -80,8 +80,13 @@ const getActivityLogs = async (req, res) => {
     const { data, error, count } = await query;
     if (error) return res.status(500).json({ message: error.message });
 
+    const enriched = (data || []).map(act => ({
+      ...act,
+      user_name: act.users?.name || "System"
+    }));
+
     res.json({
-      data,
+      data: enriched,
       meta: {
         total: count,
         page: parseInt(page),
@@ -132,14 +137,24 @@ const getRecentActivity = async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from("activity_logs")
-      .select("id, action, entity_type, entity_id, description, user_name, created_at")
+      .select("id, action, entity_type, entity_id, description, created_at, users(name)")
       .eq("hall_id", hall_id)
       .order("created_at", { ascending: false })
       .limit(parseInt(limit));
 
     if (error) return res.status(500).json({ message: error.message });
 
-    res.json(data);
+    const enriched = (data || []).map(act => ({
+      id: act.id,
+      action: act.action,
+      entity_type: act.entity_type,
+      entity_id: act.entity_id,
+      description: act.description,
+      created_at: act.created_at,
+      user_name: act.users?.name || "System"
+    }));
+
+    res.json(enriched);
   } catch (err) {
     console.error("getRecentActivity error:", err);
     res.status(500).json({ message: "Server error" });
@@ -160,23 +175,22 @@ const getActivitySummary = async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from("activity_logs")
-      .select("action, user_name, created_at")
+      .select("action, created_at, users(name)")
       .eq("hall_id", hall_id)
       .gte("created_at", since.toISOString());
 
     if (error) return res.status(500).json({ message: error.message });
 
     // Group by action
-    const byAction = data.reduce((acc, log) => {
+    const byAction = (data || []).reduce((acc, log) => {
       acc[log.action] = (acc[log.action] || 0) + 1;
       return acc;
     }, {});
 
     // Group by user
-    const byUser = data.reduce((acc, log) => {
-      if (log.user_name) {
-        acc[log.user_name] = (acc[log.user_name] || 0) + 1;
-      }
+    const byUser = (data || []).reduce((acc, log) => {
+      const userName = log.users?.name || "System";
+      acc[userName] = (acc[userName] || 0) + 1;
       return acc;
     }, {});
 

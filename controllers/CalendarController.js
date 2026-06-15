@@ -50,7 +50,20 @@ const getEvents = async (req, res) => {
 const createEvent = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-    const { event_title, event_date, start_time, end_time, booking_id } = req.body;
+    const {
+      event_title,
+      event_date,
+      end_date,
+      all_day,
+      type,
+      hall_section,
+      notes,
+      status,
+      guest_count,
+      start_time,
+      end_time,
+      booking_id,
+    } = req.body;
 
     if (!event_title || !event_date) {
       return res.status(400).json({ message: "event_title and event_date are required" });
@@ -70,7 +83,21 @@ const createEvent = async (req, res) => {
 
     const { data, error } = await supabaseAdmin
       .from("events")
-      .insert([{ hall_id, event_title, event_date, start_time, end_time, booking_id }])
+      .insert([{
+        hall_id,
+        event_title,
+        event_date,
+        end_date: end_date || event_date,
+        all_day: all_day ?? false,
+        type: type || "personal",
+        hall_section: hall_section || "Main Hall",
+        notes: notes || "",
+        status: status || "confirmed",
+        guest_count: guest_count || null,
+        start_time,
+        end_time,
+        booking_id,
+      }])
       .select()
       .single();
 
@@ -90,7 +117,19 @@ const updateEvent = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
-    const { event_title, event_date, start_time, end_time } = req.body;
+    const {
+      event_title,
+      event_date,
+      end_date,
+      all_day,
+      type,
+      hall_section,
+      notes,
+      status,
+      guest_count,
+      start_time,
+      end_time,
+    } = req.body;
 
     const { data: existing } = await supabaseAdmin
       .from("events")
@@ -104,6 +143,13 @@ const updateEvent = async (req, res) => {
     const updates = {};
     if (event_title !== undefined) updates.event_title = event_title;
     if (event_date !== undefined) updates.event_date = event_date;
+    if (end_date !== undefined) updates.end_date = end_date;
+    if (all_day !== undefined) updates.all_day = all_day;
+    if (type !== undefined) updates.type = type;
+    if (hall_section !== undefined) updates.hall_section = hall_section;
+    if (notes !== undefined) updates.notes = notes;
+    if (status !== undefined) updates.status = status;
+    if (guest_count !== undefined) updates.guest_count = guest_count;
     if (start_time !== undefined) updates.start_time = start_time;
     if (end_time !== undefined) updates.end_time = end_time;
 

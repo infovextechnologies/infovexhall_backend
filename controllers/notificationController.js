@@ -17,7 +17,7 @@ const { supabaseAdmin } = require("../config/supabase");
    ============================================================ */
 const createNotification = async ({ hall_id, type, title, message, entity_type, entity_id }) => {
   try {
-    await supabaseAdmin.from("notifications").insert([{
+    const { data, error } = await supabaseAdmin.from("notifications").insert([{
       hall_id,
       type,
       title,
@@ -26,6 +26,9 @@ const createNotification = async ({ hall_id, type, title, message, entity_type, 
       entity_id,     // UUID of the related record
       is_read: false,
     }]);
+    if (error) {
+      console.error("createNotification DB error:", error);
+    }
   } catch (err) {
     console.error("createNotification helper error:", err);
     // Non-critical — never throw from here
@@ -38,15 +41,78 @@ const createNotification = async ({ hall_id, type, title, message, entity_type, 
 const getNotifications = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
+    const isSuperAdmin = req.user.role === "super_admin";
     const { is_read, type, page = 1, limit = 30 } = req.query;
     const offset = (page - 1) * limit;
+
+    // Automatically generate billing reminders for owners dynamically when retrieving notifications
+    if (!isSuperAdmin && hall_id) {
+      try {
+        const todayStr = new Date().toISOString().split("T")[0];
+        // Fetch active/trial subscription for this hall
+        const { data: activeSub } = await supabaseAdmin
+          .from("hall_subscriptions")
+          .select("id, status, end_date, packages(name)")
+          .eq("hall_id", hall_id)
+          .in("status", ["active", "trial"])
+          .gte("end_date", todayStr)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (activeSub && activeSub.end_date) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const endDate = new Date(activeSub.end_date);
+          endDate.setHours(0, 0, 0, 0);
+
+          const diffTime = endDate.getTime() - today.getTime();
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+          // Check if we hit exactly 7, 3, or 1 days
+          if ([7, 3, 1].includes(diffDays)) {
+            const dateStr = new Date(activeSub.end_date).toLocaleDateString('en-GB');
+            const message = diffDays === 1 
+              ? `Your ${activeSub.packages?.name || "current"} subscription renews tomorrow (${dateStr}). 1 day remaining.`
+              : `Your ${activeSub.packages?.name || "current"} subscription renews on ${dateStr}. ${diffDays} days remaining.`;
+
+            // Check if notification already exists for this subscription and day threshold
+            const { count: exists } = await supabaseAdmin
+              .from("notifications")
+              .select("id", { count: "exact", head: true })
+              .eq("hall_id", hall_id)
+              .eq("type", "subscription_expiring")
+              .eq("entity_id", activeSub.id)
+              .like("message", `%${diffDays} day%`);
+
+            if (!exists || exists === 0) {
+              await createNotification({
+                hall_id,
+                type: "subscription_expiring",
+                title: "Subscription expiring soon",
+                message,
+                entity_type: "subscription",
+                entity_id: activeSub.id,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Billing reminder dynamic generation error:", err);
+      }
+    }
 
     let query = supabaseAdmin
       .from("notifications")
       .select("*", { count: "exact" })
-      .eq("hall_id", hall_id)
       .order("created_at", { ascending: false })
       .range(offset, offset + parseInt(limit) - 1);
+
+    if (isSuperAdmin) {
+      query = query.is("hall_id", null);
+    } else {
+      query = query.eq("hall_id", hall_id);
+    }
 
     if (is_read !== undefined) query = query.eq("is_read", is_read === "true");
     if (type) query = query.eq("type", type);
@@ -54,11 +120,22 @@ const getNotifications = async (req, res) => {
     const { data, error, count } = await query;
     if (error) return res.status(500).json({ message: error.message });
 
-    const unread_count = data.filter((n) => !n.is_read).length;
+    // Optimize: query the true table-wide unread count for the badge
+    let unreadQuery = supabaseAdmin
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("is_read", false);
+
+    if (isSuperAdmin) {
+      unreadQuery = unreadQuery.is("hall_id", null);
+    } else {
+      unreadQuery = unreadQuery.eq("hall_id", hall_id);
+    }
+    const { count: totalUnread } = await unreadQuery;
 
     res.json({
       data,
-      unread_count,
+      unread_count: totalUnread || 0,
       meta: {
         total: count,
         page: parseInt(page),
@@ -78,13 +155,20 @@ const getNotifications = async (req, res) => {
 const getUnreadCount = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
+    const isSuperAdmin = req.user.role === "super_admin";
 
-    const { count, error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("notifications")
       .select("id", { count: "exact", head: true })
-      .eq("hall_id", hall_id)
       .eq("is_read", false);
 
+    if (isSuperAdmin) {
+      query = query.is("hall_id", null);
+    } else {
+      query = query.eq("hall_id", hall_id);
+    }
+
+    const { count, error } = await query;
     if (error) return res.status(500).json({ message: error.message });
 
     res.json({ unread_count: count || 0 });
@@ -101,14 +185,21 @@ const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
+    const isSuperAdmin = req.user.role === "super_admin";
 
-    const { data: existing } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("notifications")
       .select("id")
-      .eq("id", id)
-      .eq("hall_id", hall_id)
-      .maybeSingle();
+      .eq("id", id);
 
+    if (isSuperAdmin) {
+      query = query.is("hall_id", null);
+    } else {
+      query = query.eq("hall_id", hall_id);
+    }
+
+    const { data: existing, error: fetchErr } = await query.maybeSingle();
+    if (fetchErr) return res.status(500).json({ message: fetchErr.message });
     if (!existing) return res.status(404).json({ message: "Notification not found" });
 
     const { error } = await supabaseAdmin
@@ -131,13 +222,20 @@ const markAsRead = async (req, res) => {
 const markAllAsRead = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
+    const isSuperAdmin = req.user.role === "super_admin";
 
-    const { error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("notifications")
       .update({ is_read: true, read_at: new Date().toISOString() })
-      .eq("hall_id", hall_id)
       .eq("is_read", false);
 
+    if (isSuperAdmin) {
+      query = query.is("hall_id", null);
+    } else {
+      query = query.eq("hall_id", hall_id);
+    }
+
+    const { error } = await query;
     if (error) return res.status(500).json({ message: error.message });
 
     res.json({ message: "All notifications marked as read" });
@@ -154,14 +252,21 @@ const deleteNotification = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
+    const isSuperAdmin = req.user.role === "super_admin";
 
-    const { data: existing } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("notifications")
       .select("id")
-      .eq("id", id)
-      .eq("hall_id", hall_id)
-      .maybeSingle();
+      .eq("id", id);
 
+    if (isSuperAdmin) {
+      query = query.is("hall_id", null);
+    } else {
+      query = query.eq("hall_id", hall_id);
+    }
+
+    const { data: existing, error: fetchErr } = await query.maybeSingle();
+    if (fetchErr) return res.status(500).json({ message: fetchErr.message });
     if (!existing) return res.status(404).json({ message: "Notification not found" });
 
     await supabaseAdmin.from("notifications").delete().eq("id", id);
@@ -178,13 +283,20 @@ const deleteNotification = async (req, res) => {
 const clearReadNotifications = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
+    const isSuperAdmin = req.user.role === "super_admin";
 
-    const { error } = await supabaseAdmin
+    let query = supabaseAdmin
       .from("notifications")
       .delete()
-      .eq("hall_id", hall_id)
       .eq("is_read", true);
 
+    if (isSuperAdmin) {
+      query = query.is("hall_id", null);
+    } else {
+      query = query.eq("hall_id", hall_id);
+    }
+
+    const { error } = await query;
     if (error) return res.status(500).json({ message: error.message });
 
     res.json({ message: "Read notifications cleared" });
@@ -236,7 +348,7 @@ const generateSystemNotifications = async (req, res) => {
       generated++;
     }
 
-    // ---- 2. Subscriptions expiring within 7 days ----
+    // ---- 2. Subscriptions expiring within 7 days (specifically on 7, 3, and 1 days remaining) ----
     const { data: expiringSubs } = await supabaseAdmin
       .from("hall_subscriptions")
       .select("id, hall_id, end_date, packages(name)")
@@ -248,25 +360,43 @@ const generateSystemNotifications = async (req, res) => {
       const days = Math.ceil(
         (new Date(sub.end_date) - today) / (1000 * 60 * 60 * 24)
       );
-      await createNotification({
-        hall_id: sub.hall_id,
-        type: "subscription_expiring",
-        title: "Subscription expiring soon",
-        message: `Your ${sub.packages?.name} plan expires in ${days} day${days !== 1 ? "s" : ""}. Renew now to avoid disruption.`,
-        entity_type: "subscription",
-        entity_id: sub.id,
-      });
-      generated++;
+      
+      if ([7, 3, 1].includes(days)) {
+        const dateStr = new Date(sub.end_date).toLocaleDateString('en-GB');
+        const message = days === 1 
+          ? `Your ${sub.packages?.name || "current"} subscription renews tomorrow (${dateStr}). 1 day remaining.`
+          : `Your ${sub.packages?.name || "current"} subscription renews on ${dateStr}. ${days} days remaining.`;
+
+        // Check if exists
+        const { count: exists } = await supabaseAdmin
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .eq("hall_id", sub.hall_id)
+          .eq("type", "subscription_expiring")
+          .eq("entity_id", sub.id)
+          .like("message", `%${days} day%`);
+
+        if (!exists || exists === 0) {
+          await createNotification({
+            hall_id: sub.hall_id,
+            type: "subscription_expiring",
+            title: "Subscription expiring soon",
+            message,
+            entity_type: "subscription",
+            entity_id: sub.id,
+          });
+          generated++;
+        }
+      }
     }
 
-    // ---- 3. Pending payments (bookings with balance > 0 and event within 7 days) ----
     const { data: bookingsWithBalance } = await supabaseAdmin
       .from("bookings")
       .select(`id, hall_id, event_name, total_amount, start_date, customers(customer_name), payments(amount)`)
       .in("status", ["confirmed", "reserved"])
       .gte("start_date", todayStr)
       .lte("start_date", sevenDaysStr);
-
+ 
     for (const bk of bookingsWithBalance || []) {
       const paid = (bk.payments || []).reduce((s, p) => s + (p.amount || 0), 0);
       const balance = (bk.total_amount || 0) - paid;

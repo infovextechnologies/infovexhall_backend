@@ -76,9 +76,14 @@ const getEnquiryFields = (body) => {
 
   if (body.lost_reason !== undefined) fields.lost_reason = body.lost_reason;
   else if (body.lostReason !== undefined) fields.lost_reason = body.lostReason;
-
   if (body.stage !== undefined) fields.status = body.stage;
   else if (body.status !== undefined) fields.status = body.status;
+
+  if (body.booking_id !== undefined) fields.booking_id = body.booking_id;
+  else if (body.bookingId !== undefined) fields.booking_id = body.bookingId;
+
+  if (body.customer_id !== undefined) fields.customer_id = body.customer_id;
+  else if (body.customerId !== undefined) fields.customer_id = body.customerId;
 
   return fields;
 };
@@ -255,7 +260,20 @@ const getEnquiries = async (req, res) => {
     const { data, error, count } = await query;
     if (error) return res.status(500).json({ message: error.message });
 
-    // Add followup summary to each enquiry
+    // Fetch all active users/staff for this hall to resolve assignees
+    const { data: users } = await supabaseAdmin
+      .from("users")
+      .select("id, name, email")
+      .eq("hall_id", hall_id);
+
+    const userMap = {};
+    if (users) {
+      users.forEach((u) => {
+        userMap[u.id] = { id: u.id, name: u.name, email: u.email };
+      });
+    }
+
+    // Add followup summary and map assignee details
     const enriched = data.map((enq) => {
       const followups = enq.enquiry_followups || [];
       const pending = followups.filter((f) => f.status === "pending");
@@ -266,6 +284,7 @@ const getEnquiries = async (req, res) => {
 
       return {
         ...enq,
+        assignee: enq.assigned_to ? (userMap[enq.assigned_to] || null) : null,
         followup_summary: {
           total: followups.length,
           pending: pending.length,
@@ -313,6 +332,17 @@ const getEnquiryById = async (req, res) => {
 
     if (error) return res.status(404).json({ message: "Enquiry not found" });
 
+    // Resolve assignee user details
+    let assignee = null;
+    if (data.assigned_to) {
+      const { data: usr } = await supabaseAdmin
+        .from("users")
+        .select("id, name, email")
+        .eq("id", data.assigned_to)
+        .maybeSingle();
+      if (usr) assignee = { id: usr.id, name: usr.name, email: usr.email };
+    }
+
     // If enquiry was converted to a booking, include booking details
     let booking = null;
     if (data.booking_id) {
@@ -324,7 +354,7 @@ const getEnquiryById = async (req, res) => {
       booking = bk;
     }
 
-    res.json({ ...data, booking });
+    res.json({ ...data, assignee, booking });
   } catch (err) {
     console.error("getEnquiryById error:", err);
     res.status(500).json({ message: "Server error" });
@@ -583,10 +613,15 @@ const convertToBooking = async (req, res) => {
       end_time: "21:00:00",
     }]);
 
-    // Mark enquiry as booked and link to booking
+    // Delete enquiry followups first, then the enquiry itself (no details stored in enquiry/followup tables upon conversion)
+    await supabaseAdmin
+      .from("enquiry_followups")
+      .delete()
+      .eq("enquiry_id", id);
+
     await supabaseAdmin
       .from("enquiries")
-      .update({ status: "booked", booking_id: booking.id, closed_at: new Date().toISOString() })
+      .delete()
       .eq("id", id);
 
     // Log Activity
@@ -831,6 +866,117 @@ const getTodaysFollowups = async (req, res) => {
   }
 };
 
+/* ============================================================
+   BULK CREATE ENQUIRIES (CSV Import)
+   ============================================================ */
+const bulkCreateEnquiries = async (req, res) => {
+  try {
+    const hall_id = req.user.hall_id;
+    const enquiriesArray = req.body.enquiries;
+
+    if (!Array.isArray(enquiriesArray) || enquiriesArray.length === 0) {
+      return res.status(400).json({ message: "enquiries array is required and must not be empty" });
+    }
+
+    const year = new Date().getFullYear();
+    const { count } = await supabaseAdmin
+      .from("enquiries")
+      .select("id", { count: "exact", head: true })
+      .eq("hall_id", hall_id)
+      .ilike("enquiry_number", `ENQ-${year}-%`);
+
+    let currentSeq = (count || 0) + 1;
+    const payloads = [];
+
+    for (const item of enquiriesArray) {
+      const fields = getEnquiryFields(item);
+      const seqStr = String(currentSeq++).padStart(4, "0");
+      const enquiry_number = item.enquiry_number || item.enquiryNumber || `ENQ-${year}-${seqStr}`;
+
+      payloads.push({
+        ...fields,
+        hall_id,
+        enquiry_number,
+        status: fields.status || "new",
+      });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("enquiries")
+      .insert(payloads)
+      .select();
+
+    if (error) return res.status(500).json({ message: error.message });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "enquiry.bulk_created",
+      entity_type: "enquiry",
+      description: `Bulk imported ${data.length} enquiries`,
+      metadata: { count: data.length },
+    });
+
+    res.status(201).json({ message: "Enquiries imported successfully", count: data.length, data });
+  } catch (err) {
+    console.error("bulkCreateEnquiries error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+/* ============================================================
+   DELETE ENQUIRY
+   Purges an enquiry and its associated follow-ups
+   ============================================================ */
+const deleteEnquiry = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const hall_id = req.user.hall_id;
+
+    // Verify enquiry belongs to hall
+    const { data: existing } = await supabaseAdmin
+      .from("enquiries")
+      .select("id, customer_name, enquiry_number")
+      .eq("id", id)
+      .eq("hall_id", hall_id)
+      .maybeSingle();
+
+    if (!existing) return res.status(404).json({ message: "Enquiry not found" });
+
+    // First delete followups
+    await supabaseAdmin
+      .from("enquiry_followups")
+      .delete()
+      .eq("enquiry_id", id);
+
+    // Then delete enquiry
+    const { error } = await supabaseAdmin
+      .from("enquiries")
+      .delete()
+      .eq("id", id);
+
+    if (error) return res.status(500).json({ message: error.message });
+
+    // Log Activity
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "enquiry.deleted",
+      entity_type: "enquiry",
+      entity_id: id,
+      description: `Deleted enquiry #${existing.enquiry_number || id} of ${existing.customer_name}`,
+    });
+
+    res.json({ message: "Enquiry deleted successfully" });
+  } catch (err) {
+    console.error("deleteEnquiry error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   createEnquiry,
   getEnquiries,
@@ -843,4 +989,6 @@ module.exports = {
   completeFollowup,
   getFollowups,
   getTodaysFollowups,
+  bulkCreateEnquiries,
+  deleteEnquiry,
 };

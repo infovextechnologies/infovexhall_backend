@@ -7,8 +7,11 @@ const { supabaseAdmin } = require("../config/supabase");
 module.exports = async (req, res, next) => {
   if (req.user.role === "super_admin") return next();
 
-  const hall_id = req.user.hall_id;
-  if (!hall_id) {
+  // Allow dashboard, support, and notification queries to bypass so the frontend can read active subscription status and communicate when expired
+  if (req.baseUrl === "/dashboard" || req.baseUrl === "/support" || req.baseUrl === "/notifications") return next();
+
+  const hall_id = req.user.primary_hall_id || req.user.hall_id;
+  if (!hall_id || hall_id === "all") {
     return res.status(403).json({ message: "No hall associated with this user" });
   }
 
@@ -18,8 +21,10 @@ module.exports = async (req, res, next) => {
     .from("hall_subscriptions")
     .select("status, end_date")
     .eq("hall_id", hall_id)
-    .eq("status", "active")
+    .in("status", ["active", "trial"])
     .gte("end_date", today)
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error || !sub) {

@@ -46,7 +46,7 @@ const loginUser = async (req, res) => {
     // Regular user
     const { data: user } = await supabaseAdmin
       .from("users")
-      .select("id, name, email, role, hall_id, multi_hall_enabled, different_staff_management")
+      .select("id, name, email, role, hall_id, multi_hall_enabled, different_staff_management, status")
       .eq("auth_user_id", authUserId)
       .maybeSingle();
 
@@ -154,6 +154,10 @@ const getProfile = async (req, res) => {
 const createSuperAdmin = async (req, res) => {
   try {
     const { name, email, password, bootstrap_secret } = req.body;
+
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ message: "Bootstrap super admin creation is disabled in production environment" });
+    }
 
     // Protect this endpoint with a secret set in .env
     if (bootstrap_secret !== process.env.BOOTSTRAP_SECRET) {

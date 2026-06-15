@@ -62,6 +62,9 @@ const mapSettingsBodyToDb = (body) => {
   if (body.booking_confirmation_message !== undefined) fields.booking_confirmation_message = body.booking_confirmation_message;
   if (body.payment_reminder_message !== undefined) fields.payment_reminder_message = body.payment_reminder_message;
 
+  if (body.invoiceTemplate !== undefined) fields.invoice_template = body.invoiceTemplate;
+  else if (body.invoice_template !== undefined) fields.invoice_template = body.invoice_template;
+
   // JSON fields
   if (body.notifications !== undefined) fields.notifications = body.notifications;
   if (body.bookingSettings !== undefined) fields.booking_settings = body.bookingSettings;
@@ -125,6 +128,7 @@ const formatDbSettingsToFrontend = (data) => {
       workingHoursEnd: "23:00",
       workingDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
     },
+    invoiceTemplate: data.invoice_template || "classic",
     updatedAt: data.updated_at,
   };
 };

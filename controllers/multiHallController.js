@@ -4,7 +4,7 @@ const { logActivity } = require("./activityLogController");
 /* Get premium plan status */
 const checkPremiumStatus = async (req, res) => {
   try {
-    const hall_id = req.user.hall_id;
+    const hall_id = req.user.primary_hall_id || req.user.hall_id;
     const today = new Date().toISOString().split("T")[0];
 
     const { data: sub } = await supabaseAdmin
@@ -16,7 +16,7 @@ const checkPremiumStatus = async (req, res) => {
       .maybeSingle();
 
     const hasPremium = sub?.packages?.name?.toLowerCase().includes("premium") || 
-                       sub?.packages?.features?.includes("multi_hall") || 
+                       sub?.packages?.features?.multi_hall || 
                        false;
 
     res.json({ premium: hasPremium, planName: sub?.packages?.name || "None" });
@@ -39,16 +39,17 @@ const toggleMultiHall = async (req, res) => {
     if (enabled) {
       // Check premium tier
       const today = new Date().toISOString().split("T")[0];
+      const subscriptionHallId = req.user.primary_hall_id || req.user.hall_id;
       const { data: sub } = await supabaseAdmin
         .from("hall_subscriptions")
         .select("package_id, packages(name, features)")
-        .eq("hall_id", req.user.hall_id)
+        .eq("hall_id", subscriptionHallId)
         .eq("status", "active")
         .gte("end_date", today)
         .maybeSingle();
 
       const hasPremium = sub?.packages?.name?.toLowerCase().includes("premium") || 
-                         sub?.packages?.features?.includes("multi_hall") || 
+                         sub?.packages?.features?.multi_hall || 
                          false;
 
       if (!hasPremium) {
@@ -144,16 +145,17 @@ const registerSecondHall = async (req, res) => {
 
     // Validate premium status
     const today = new Date().toISOString().split("T")[0];
+    const subscriptionHallId = req.user.primary_hall_id || req.user.hall_id;
     const { data: sub } = await supabaseAdmin
       .from("hall_subscriptions")
       .select("package_id, packages(name, features)")
-      .eq("hall_id", req.user.hall_id)
+      .eq("hall_id", subscriptionHallId)
       .eq("status", "active")
       .gte("end_date", today)
       .maybeSingle();
 
     const hasPremium = sub?.packages?.name?.toLowerCase().includes("premium") || 
-                       sub?.packages?.features?.includes("multi_hall") || 
+                       sub?.packages?.features?.multi_hall || 
                        false;
 
     if (!hasPremium) {

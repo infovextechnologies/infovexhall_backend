@@ -72,6 +72,8 @@ const createBooking = async (req, res) => {
       hall_section,
       guest_count,
       discount_amount,
+      coordinator_name,
+      coordinator_phone,
     } = req.body;
 
     if (!customer_id || !start_date || !end_date) {
@@ -125,12 +127,18 @@ const createBooking = async (req, res) => {
       });
     }
 
+    // Generate unique friendly booking number
+    const year = new Date().getFullYear();
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const booking_number = `BKG-${year}-${randomSuffix}`;
+
     // ---- Create booking ----
     const { data, error } = await supabaseAdmin
       .from("bookings")
       .insert([{
         hall_id,
         customer_id,
+        booking_number,
         event_name,
         event_type,
         start_date,
@@ -142,6 +150,8 @@ const createBooking = async (req, res) => {
         hall_section,
         guest_count,
         discount_amount: discount_amount || 0,
+        coordinator_name: coordinator_name || null,
+        coordinator_phone: coordinator_phone || null,
       }])
       .select(`
         *,
@@ -182,7 +192,7 @@ const createBooking = async (req, res) => {
       entity_type: "booking",
       entity_id: data.id,
       description: `Created booking for ${customer.customer_name} - ${event_name || event_type || "Event"}`,
-      metadata: { total_amount, start_date, end_date, hall_section },
+      metadata: { total_amount, start_date, end_date, hall_section, booking_number },
     });
 
     res.status(201).json({ message: "Booking created successfully", data });
@@ -198,7 +208,7 @@ const createBooking = async (req, res) => {
 const getBookings = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-    const { status, from_date, to_date, customer_id, page = 1, limit = 20 } = req.query;
+    const { status, from_date, to_date, customer_id, search, page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
 
     let query = supabaseAdmin
@@ -216,6 +226,25 @@ const getBookings = async (req, res) => {
     if (from_date) query = query.gte("start_date", from_date);
     if (to_date) query = query.lte("start_date", to_date);
     if (customer_id) query = query.eq("customer_id", customer_id);
+
+    if (search && search.trim() !== "") {
+      const cleanSearch = search.trim();
+      
+      const { data: matchingCustomers } = await supabaseAdmin
+        .from("customers")
+        .select("id")
+        .eq("hall_id", hall_id)
+        .or(`customer_name.ilike.%${cleanSearch}%,phone.ilike.%${cleanSearch}%,email.ilike.%${cleanSearch}%`);
+
+      const customerIds = (matchingCustomers || []).map(c => c.id);
+
+      let orConditions = `event_name.ilike.%${cleanSearch}%,event_type.ilike.%${cleanSearch}%,notes.ilike.%${cleanSearch}%,booking_number.ilike.%${cleanSearch}%,coordinator_name.ilike.%${cleanSearch}%`;
+      if (customerIds.length > 0) {
+        orConditions += `,customer_id.in.(${customerIds.join(",")})`;
+      }
+
+      query = query.or(orConditions);
+    }
 
     const { data, error, count } = await query;
     if (error) return res.status(500).json({ message: error.message });
@@ -298,6 +327,8 @@ const updateBooking = async (req, res) => {
       hall_section,
       guest_count,
       discount_amount,
+      coordinator_name,
+      coordinator_phone,
     } = req.body;
 
     const { data: existing } = await supabaseAdmin
@@ -342,6 +373,8 @@ const updateBooking = async (req, res) => {
     if (hall_section !== undefined) updates.hall_section = hall_section;
     if (guest_count !== undefined) updates.guest_count = guest_count;
     if (discount_amount !== undefined) updates.discount_amount = discount_amount;
+    if (coordinator_name !== undefined) updates.coordinator_name = coordinator_name;
+    if (coordinator_phone !== undefined) updates.coordinator_phone = coordinator_phone;
 
     const { error } = await supabaseAdmin.from("bookings").update(updates).eq("id", id);
     if (error) return res.status(500).json({ message: error.message });
@@ -455,6 +488,50 @@ const getBookingStats = async (req, res) => {
   }
 };
 
+const deleteBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const hall_id = req.user.hall_id;
+
+    // Verify booking exists
+    const { data: existing, error: findError } = await supabaseAdmin
+      .from("bookings")
+      .select("id, event_name")
+      .eq("id", id)
+      .eq("hall_id", hall_id)
+      .maybeSingle();
+
+    if (findError) return res.status(500).json({ message: findError.message });
+    if (!existing) return res.status(404).json({ message: "Booking not found in your hall" });
+
+    // Delete associated events
+    await supabaseAdmin.from("events").delete().eq("booking_id", id);
+
+    // Delete associated payments
+    await supabaseAdmin.from("payments").delete().eq("booking_id", id);
+
+    // Delete booking
+    const { error: deleteError } = await supabaseAdmin.from("bookings").delete().eq("id", id);
+    if (deleteError) return res.status(500).json({ message: deleteError.message });
+
+    // ---- Log Activity ----
+    await logActivity({
+      hall_id,
+      user_id: req.user.id,
+      user_name: req.user.name,
+      action: "booking.deleted",
+      entity_type: "booking",
+      entity_id: id,
+      description: `Deleted booking for event: ${existing.event_name}`,
+    });
+
+    res.json({ message: "Booking deleted successfully" });
+  } catch (err) {
+    console.error("deleteBooking error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   checkAvailability,
   createBooking,
@@ -463,4 +540,5 @@ module.exports = {
   updateBooking,
   cancelBooking,
   getBookingStats,
+  deleteBooking,
 };

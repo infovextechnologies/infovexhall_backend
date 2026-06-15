@@ -10,6 +10,7 @@ const isOwner = [authMiddleware, roleMiddleware("owner"), subscriptionMiddleware
 router.post("/", ...isOwner, createStaff);
 router.get("/", ...isOwner, getStaff);
 router.patch("/:id", ...isOwner, updateStaff);
+router.put("/:id", ...isOwner, updateStaff);
 router.delete("/:id", ...isOwner, deleteStaff);
 
 module.exports = router;

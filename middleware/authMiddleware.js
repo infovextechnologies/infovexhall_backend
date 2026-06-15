@@ -1,10 +1,14 @@
 const { supabaseAdmin } = require("../config/supabase");
+const { syncExpiredSubscriptions } = require("../utils/subscriptionHelper");
 
 /**
  * Verifies Supabase JWT token from Authorization header.
  * Attaches req.user = { id, email, role, hall_id, ... }
  */
 module.exports = async (req, res, next) => {
+  // Sync expired subscriptions first
+  await syncExpiredSubscriptions();
+
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -27,7 +31,7 @@ module.exports = async (req, res, next) => {
     // Fetch full user profile from our users table using auth_user_id
     const { data: profile, error: profileError } = await supabaseAdmin
       .from("users")
-      .select("id, name, email, role, hall_id, auth_user_id, multi_hall_enabled, different_staff_management")
+      .select("id, name, email, role, hall_id, auth_user_id, multi_hall_enabled, different_staff_management, status")
       .eq("auth_user_id", user.id)
       .maybeSingle();
 
@@ -57,6 +61,7 @@ module.exports = async (req, res, next) => {
     }
 
     req.user = profile;
+    req.user.primary_hall_id = profile.hall_id;
 
     // Verify and switch dynamic hall context if header provided
     if (activeHallId) {
@@ -64,29 +69,35 @@ module.exports = async (req, res, next) => {
       if (profile.role === "owner" && profile.multi_hall_enabled) {
         canSwitch = true;
       } else if (profile.role === "manager" || profile.role === "staff") {
-        // Check if the owner of their primary hall has multi_hall_enabled = true
+        // Check if the owner of their primary hall has multi_hall_enabled = true AND different_staff_management = false
         const { data: owner } = await supabaseAdmin
           .from("users")
-          .select("multi_hall_enabled")
+          .select("multi_hall_enabled, different_staff_management")
           .eq("hall_id", profile.hall_id)
           .eq("role", "owner")
           .maybeSingle();
         
-        if (owner && owner.multi_hall_enabled) {
+        if (owner && owner.multi_hall_enabled && !owner.different_staff_management) {
           canSwitch = true;
         }
       }
 
       if (canSwitch) {
-        const { data: link, error: linkErr } = await supabaseAdmin
-          .from("user_halls")
-          .select("hall_id")
-          .eq("user_id", profile.id)
-          .eq("hall_id", activeHallId)
-          .maybeSingle();
+        if (activeHallId === "all") {
+          if (profile.role === "owner") {
+            req.user.hall_id = "all";
+          }
+        } else {
+          const { data: link, error: linkErr } = await supabaseAdmin
+            .from("user_halls")
+            .select("hall_id")
+            .eq("user_id", profile.id)
+            .eq("hall_id", activeHallId)
+            .maybeSingle();
 
-        if (!linkErr && link) {
-          req.user.hall_id = activeHallId;
+          if (!linkErr && link) {
+            req.user.hall_id = activeHallId;
+          }
         }
       }
     }

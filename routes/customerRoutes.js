@@ -9,6 +9,7 @@ const {
   getCustomerById,
   updateCustomer,
   deleteCustomer,
+  logCustomerInteraction,
 } = require("../controllers/customerController");
 
 // All staff roles can read customers; owner/manager can write
@@ -20,5 +21,6 @@ router.get("/:id", ...isAuthenticated, getCustomerById);
 router.post("/", ...isOwnerOrManager, createCustomer);
 router.put("/:id", ...isOwnerOrManager, updateCustomer);
 router.delete("/:id", ...isOwnerOrManager, deleteCustomer);
+router.post("/:id/interactions", ...isAuthenticated, logCustomerInteraction);
 
 module.exports = router;
