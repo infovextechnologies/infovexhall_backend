@@ -41,7 +41,8 @@ const allowedOrigins = [
   "http://localhost:3001",
   "https://hallsondesk.netlify.app",
   "https://infovexweddinghallcrm.netlify.app",
-  "https://hallflow2.netlify.app"
+  "https://hallflow2.netlify.app",
+  "https://infovexhalls.vercel.app"
 ];
 
 app.use(cors({
