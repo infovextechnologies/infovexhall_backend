@@ -39,19 +39,20 @@ app.use(helmet());
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 const allowedOrigins = [
-  "https://infovexhalls.vercel.app"
+  "https://infovexhalls.vercel.app",
+  "http://localhost:3001"
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, or server-to-server)
     if (!origin) return callback(null, true);
-    
+
     // Match allowed list or any Vercel deployment URL
     if (allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
       return callback(null, true);
     }
-    
+
     return callback(new Error("Not allowed by CORS"), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -78,9 +79,9 @@ app.use("/hall/settings", hallSettingsRoutes);
 app.use("/enquiries", enquiryRoutes);
 app.use("/invoices", invoiceRoutes);
 app.use("/notifications", notificationRoutes);
-app.use("/activity-logs",  activityLogRoutes);
-app.use("/multihall",      multiHallRoutes);
-app.use("/support",        supportRoutes);
+app.use("/activity-logs", activityLogRoutes);
+app.use("/multihall", multiHallRoutes);
+app.use("/support", supportRoutes);
 
 // ---- Health check ----
 app.get("/health", (req, res) => {
