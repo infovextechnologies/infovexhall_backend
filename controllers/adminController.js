@@ -180,11 +180,44 @@ const activateHall = async (req, res) => {
 const deleteHall = async (req, res) => {
   const { id } = req.params;
 
+  // 1. Fetch user auth IDs before we delete the users table rows
   const { data: users } = await supabaseAdmin.from("users").select("auth_user_id").eq("hall_id", id);
 
+  // 2. Defensively clean up records from referencing tables to bypass foreign key constraint errors
+  const tablesToDelete = [
+    "activity_logs",
+    "booking_vendors",
+    "invoices",
+    "payments",
+    "subscription_payments",
+    "support_tickets",
+    "enquiry_followups",
+    "notifications",
+    "events",
+    "user_halls",
+    "bookings",
+    "enquiries",
+    "vendors",
+    "customers",
+    "hall_subscriptions",
+    "hall_settings",
+    "hall_profiles",
+    "users"
+  ];
+
+  for (const table of tablesToDelete) {
+    try {
+      await supabaseAdmin.from(table).delete().eq("hall_id", id);
+    } catch (err) {
+      console.warn(`Defensive warning: Failed to delete from ${table}:`, err.message);
+    }
+  }
+
+  // 3. Delete the main marriage_halls record
   const { error } = await supabaseAdmin.from("marriage_halls").delete().eq("id", id);
   if (error) return res.status(500).json({ message: error.message });
 
+  // 4. Delete auth credentials from Supabase Auth
   if (users?.length > 0) {
     await Promise.all(
       users.map((u) =>
