@@ -79,16 +79,32 @@ const createHall = async (req, res) => {
   }
 
   // 4. Create subscription
+  const { data: pkg } = await supabaseAdmin
+    .from("packages")
+    .select("name")
+    .eq("id", package_id)
+    .maybeSingle();
+
+  let trialDays = 30;
+  if (pkg) {
+    const nameLower = pkg.name.toLowerCase();
+    if (nameLower.includes("basic")) {
+      trialDays = 30;
+    } else {
+      trialDays = 60;
+    }
+  }
+
   const startDate = new Date();
   const endDate = new Date();
-  endDate.setMonth(endDate.getMonth() + 1);
+  endDate.setDate(endDate.getDate() + trialDays);
 
   const { error: subError } = await supabaseAdmin.from("hall_subscriptions").insert([{
     hall_id: hall.id,
     package_id,
     start_date: getLocalDate(startDate),
     end_date: getLocalDate(endDate),
-    status: "active",
+    status: "trial",
     payment_status: "pending",
   }]);
 
@@ -1224,7 +1240,7 @@ const getHallSubscriptionPayments = async (req, res) => {
 const recordManualSubscriptionPayment = async (req, res) => {
   try {
     const { id: hall_id } = req.params;
-    const { package_id, amount, payment_method = "bank_transfer", transaction_ref_no, notes = "" } = req.body;
+    const { package_id, amount, payment_method = "bank_transfer", transaction_ref_no, notes = "", tax_enabled = false } = req.body;
 
     if (!package_id || !amount) {
       return res.status(400).json({ message: "package_id and amount are required" });
@@ -1257,7 +1273,8 @@ const recordManualSubscriptionPayment = async (req, res) => {
         status: "approved",
         notes: notes || "Recorded manually by Infovex Admin.",
         verified_at: today.toISOString(),
-        verified_by: req.user.id
+        verified_by: req.user.id,
+        tax_enabled: !!tax_enabled
       }])
       .select()
       .single();

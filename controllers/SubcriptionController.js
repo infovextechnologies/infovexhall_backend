@@ -271,7 +271,7 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
       .limit(1)
       .maybeSingle();
 
-    const companyName = settings?.company_name || "Infovex Technologies Private Limited";
+    const companyName = "Infovex Halls";
     const companyGstin = settings?.gstin || "33AAFCI8876F1Z8";
     const supportPhone = settings?.support_phone || "+91 91801 02030";
     const supportEmail = settings?.support_email || "billing@infovex.com";
@@ -289,9 +289,11 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
     const verifiedDate = payment.verified_at ? new Date(payment.verified_at).toLocaleDateString("en-GB") : "N/A";
 
     const baseAmount = parseFloat(payment.amount || 0);
+    const taxEnabled = !!payment.tax_enabled;
     const taxRate = 0.18; // India standard SaaS GST 18%
-    const subtotal = baseAmount / (1 + taxRate);
-    const totalTax = baseAmount - subtotal;
+    
+    const subtotal = taxEnabled ? (baseAmount / (1 + taxRate)) : baseAmount;
+    const totalTax = taxEnabled ? (baseAmount - subtotal) : 0;
     const cgst = totalTax / 2;
     const sgst = totalTax / 2;
 
@@ -305,6 +307,20 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
       statusBadge = `<span style="background: #fef7e0; color: #b06000; border: 1px solid #fde293; padding: 4px 10px; border-radius: 12px; font-weight: bold; font-size: 11px; text-transform: uppercase;">PENDING VERIFICATION</span>`;
     } else {
       statusBadge = `<span style="background: #fce8e6; color: #c5221f; border: 1px solid #fad2cf; padding: 4px 10px; border-radius: 12px; font-weight: bold; font-size: 11px; text-transform: uppercase;">REJECTED</span>`;
+    }
+
+    let taxRows = "";
+    if (taxEnabled) {
+      taxRows = `
+        <tr>
+          <td>CGST (9%):</td>
+          <td style="text-align: right; font-family: monospace;">${fmt(cgst)}</td>
+        </tr>
+        <tr>
+          <td>SGST (9%):</td>
+          <td style="text-align: right; font-family: monospace;">${fmt(sgst)}</td>
+        </tr>
+      `;
     }
 
     const htmlContent = `
@@ -349,19 +365,20 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
     }
 
     .logo-text {
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 800;
       color: #4f46e5;
       letter-spacing: -0.5px;
       margin: 0;
+      line-height: 1;
     }
 
     .logo-sub {
-      font-size: 10px;
+      font-size: 9px;
       color: #64748b;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 1px;
+      letter-spacing: 0.5px;
       margin-top: 2px;
     }
 
@@ -532,11 +549,16 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
     <table class="header-table">
       <tr>
         <td>
-          <div class="logo-text">HallsOnDesk</div>
-          <div class="logo-sub">Venue OS Platform</div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <img src="/logo.png" alt="Logo" style="height: 38px; object-fit: contain;">
+            <div>
+              <div class="logo-text">Infovex Halls</div>
+              <div class="logo-sub">Venue CRM & ERP</div>
+            </div>
+          </div>
         </td>
         <td class="invoice-title-block">
-          <div class="invoice-title">Tax Invoice</div>
+          <div class="invoice-title">Invoice</div>
           <div class="meta-details">
             <div>Invoice No: <strong>${invoiceNo}</strong></div>
             <div>Date: <strong>${invoiceDate}</strong></div>
@@ -585,7 +607,7 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
       <tbody>
         <tr>
           <td>
-            <div class="item-desc">HallsOnDesk SaaS Subscription</div>
+            <div class="item-desc">Infovex Halls SaaS Subscription</div>
             <div class="item-sub">Package: ${payment.packages?.name || "SaaS Plan"} (${payment.packages?.billing_cycle || "monthly"})</div>
           </td>
           <td style="text-align: right;">1</td>
@@ -613,14 +635,7 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
               <td>Subtotal:</td>
               <td style="text-align: right; font-family: monospace;">${fmt(subtotal)}</td>
             </tr>
-            <tr>
-              <td>CGST (9%):</td>
-              <td style="text-align: right; font-family: monospace;">${fmt(cgst)}</td>
-            </tr>
-            <tr>
-              <td>SGST (9%):</td>
-              <td style="text-align: right; font-family: monospace;">${fmt(sgst)}</td>
-            </tr>
+            ${taxRows}
             <tr class="grand-total">
               <td>Total Paid:</td>
               <td style="text-align: right; font-family: monospace;">${fmt(baseAmount)}</td>
@@ -631,7 +646,7 @@ const getSubscriptionInvoiceHtml = async (req, res) => {
     </table>
 
     <div class="footer-note">
-      Powered by HallsOnDesk — India's First dedicated Venue CRM by Infovex Technologies
+      Powered by Infovex Halls — India's First dedicated Venue CRM by Infovex Technologies
     </div>
   </div>
 </body>
