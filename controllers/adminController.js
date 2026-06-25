@@ -547,7 +547,7 @@ const getAdminAnalytics = async (req, res) => {
     // ── 4. Package Distribution ──
     const packageCounts = {};
     subs.forEach((sub) => {
-      const name = sub.packages?.name || "Free Trial";
+      const name = sub.packages?.name || "Onboarding Setup";
       packageCounts[name] = (packageCounts[name] || 0) + 1;
     });
     const totalSubsCount = Object.values(packageCounts).reduce((a, b) => a + b, 0) || 1;
@@ -748,9 +748,9 @@ const getHallActivity = async (req, res) => {
           s.status === "active"
             ? "Subscription Activated"
             : s.status === "trial"
-            ? "Trial Started"
+            ? "Setup Mode Activated"
             : `Subscription ${s.status.charAt(0).toUpperCase() + s.status.slice(1)}`,
-        description: `Package: ${s.packages?.name || "Free Trial"} — Valid till ${
+        description: `Package: ${s.packages?.name || "Onboarding Setup"} — Valid till ${
           s.end_date ? new Date(s.end_date).toLocaleDateString("en-GB") : "N/A"
         }`,
         timestamp: s.created_at,
@@ -899,7 +899,7 @@ const getAdminSettings = async (req, res) => {
           welcome:
             "Hello {{owner_name}},\n\nWelcome to Infovex Halls! Your account has been set up successfully.",
           trialExpiring:
-            "Hi {{owner_name}},\n\nYour free trial is expiring in 3 days.",
+            "Hi {{owner_name}},\n\nYour onboarding setup phase is ending in 3 days.",
           paymentSuccess:
             "Dear {{owner_name}},\n\nWe have received your subscription payment.",
           subscriptionSuspended:
