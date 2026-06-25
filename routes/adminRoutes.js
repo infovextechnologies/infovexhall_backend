@@ -30,6 +30,8 @@ const {
   getSetupFeePayments,
   updateSetupFeePayment,
   generateCustomAdminInvoice,
+  changeUserPassword,
+  adjustHallSubscription,
 } = require("../controllers/adminController");
 
 const isSuperAdmin = [authMiddleware, roleMiddleware("super_admin")];
@@ -40,6 +42,7 @@ router.get("/analytics", ...isSuperAdmin, getAdminAnalytics);
 router.get("/users", ...isSuperAdmin, getAdminUsers);
 router.patch("/users/:id/status", ...isSuperAdmin, updateAdminUserStatus);
 router.post("/users/:id/reset-password", ...isSuperAdmin, resetAdminUserPassword);
+router.post("/users/:id/change-password", ...isSuperAdmin, changeUserPassword);
 router.get("/settings", ...isSuperAdmin, getAdminSettings);
 router.put("/settings", ...isSuperAdmin, updateAdminSettings);
 router.get("/tickets", ...isSuperAdmin, getAdminTickets);
@@ -52,6 +55,9 @@ router.get("/billing/pending", ...isSuperAdmin, getPendingSubscriptionPayments);
 router.post("/billing/:id/verify", ...isSuperAdmin, verifySubscriptionPayment);
 router.post("/billing/test-email", ...isSuperAdmin, sendTestEmail);
 router.get("/billing/payments/:id/html", ...isSuperAdmin, getSubscriptionInvoiceHtml);
+
+// Subscription adjustments
+router.put("/subscriptions/:id/adjust", ...isSuperAdmin, adjustHallSubscription);
 
 // Setup Fee Payments
 router.get("/setup-fee-payments", ...isSuperAdmin, getSetupFeePayments);

@@ -1962,6 +1962,143 @@ const generateCustomAdminInvoice = async (req, res) => {
   }
 };
 
+const changeUserPassword = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+
+    if (!password || password.length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters long" });
+    }
+
+    // 1. Get user profile
+    const { data: user, error: userError } = await supabaseAdmin
+      .from("users")
+      .select("auth_user_id, email, hall_id")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (userError || !user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // 2. Update Supabase Auth user password
+    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(
+      user.auth_user_id,
+      { password: password }
+    );
+
+    if (authError) {
+      return res.status(400).json({ message: `Auth update failed: ${authError.message}` });
+    }
+
+    // 3. Encrypt and save backup_password_enc
+    const cryptoHelper = require("../utils/cryptoHelper");
+    const backup_password_enc = cryptoHelper.encrypt(password);
+
+    const { error: updateError } = await supabaseAdmin
+      .from("users")
+      .update({ backup_password_enc, updated_at: new Date().toISOString() })
+      .eq("id", id);
+
+    if (updateError) {
+      return res.status(500).json({ message: `Failed to update local user backup: ${updateError.message}` });
+    }
+
+    // 4. Log activity notification
+    try {
+      await createNotification({
+        hall_id: user.hall_id,
+        type: "alert",
+        title: "Password Changed by Admin",
+        message: `Super Admin manually changed password for user ${user.email}.`,
+      });
+    } catch (notifyErr) {
+      console.warn("Failed to create password change notification:", notifyErr.message);
+    }
+
+    res.json({ message: "Password changed successfully" });
+  } catch (err) {
+    console.error("changeUserPassword error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+const adjustHallSubscription = async (req, res) => {
+  try {
+    const { id } = req.params; // this can be subscription ID or hall ID
+    const { end_date, grace_days, status } = req.body;
+
+    // First, find the subscription row by subscription ID
+    let { data: sub, error: fetchError } = await supabaseAdmin
+      .from("hall_subscriptions")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (fetchError || !sub) {
+      // Try fetching by hall_id just in case the client sent the hall_id
+      const { data: subByHall, error: fetchByHallError } = await supabaseAdmin
+        .from("hall_subscriptions")
+        .select("*")
+        .eq("hall_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (subByHall) {
+        sub = subByHall;
+      } else {
+        return res.status(404).json({ message: "Subscription record not found" });
+      }
+    }
+
+    const updates = {};
+    if (end_date) {
+      updates.end_date = end_date;
+    }
+    if (grace_days) {
+      const currentEndDate = new Date(sub.end_date);
+      const baseDate = isNaN(currentEndDate.getTime()) || currentEndDate < new Date() ? new Date() : currentEndDate;
+      baseDate.setDate(baseDate.getDate() + parseInt(grace_days));
+      updates.end_date = baseDate.toISOString().split("T")[0];
+    }
+    if (status) {
+      updates.status = status;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "No adjust parameters provided" });
+    }
+
+    updates.updated_at = new Date().toISOString();
+
+    const { data: updatedSub, error: updateError } = await supabaseAdmin
+      .from("hall_subscriptions")
+      .update(updates)
+      .eq("id", sub.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      return res.status(500).json({ message: updateError.message });
+    }
+
+    // If status is active, also ensure the hall status is set to active
+    if (status === "active" || updates.status === "active") {
+      await supabaseAdmin
+        .from("marriage_halls")
+        .update({ status: "active" })
+        .eq("id", sub.hall_id);
+    }
+
+    res.json({ message: "Subscription adjusted successfully", data: updatedSub });
+  } catch (err) {
+    console.error("adjustHallSubscription error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   createHall,
   getAllHalls,
@@ -1990,4 +2127,6 @@ module.exports = {
   getSetupFeePayments,
   updateSetupFeePayment,
   generateCustomAdminInvoice,
+  changeUserPassword,
+  adjustHallSubscription,
 };
