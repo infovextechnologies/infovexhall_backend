@@ -7,7 +7,22 @@ const { createNotification } = require("./notificationController");
 // ─────────────────────────────────────────────────────────────────────────────
 
 const createHall = async (req, res) => {
-  const { hall_name, owner_name, owner_email, password, phone, city, address, package_id } = req.body;
+  const {
+    hall_name,
+    owner_name,
+    owner_email,
+    password,
+    phone,
+    city,
+    address,
+    package_id,
+    setup_fee_amount,
+    amount_paid,
+    setup_fee_status,
+    payment_method,
+    transaction_ref_no,
+    notes
+  } = req.body;
 
   if (!hall_name || !owner_name || !owner_email || !password || !package_id) {
     return res.status(400).json({
@@ -86,7 +101,32 @@ const createHall = async (req, res) => {
     .maybeSingle();
 
   let trialDays = 30;
-  const setupFee = parseFloat(pkg?.setup_fee || 0);
+  const packageSetupFee = parseFloat(pkg?.setup_fee || 0);
+  const setupFee = setup_fee_amount !== undefined ? parseFloat(setup_fee_amount) : packageSetupFee;
+  const amtPaid = amount_paid !== undefined ? parseFloat(amount_paid) : 0;
+  
+  let status = "unpaid";
+  if (setup_fee_status) {
+    status = setup_fee_status;
+  } else {
+    if (setupFee <= 0 || amtPaid >= setupFee) {
+      status = "paid";
+    } else if (amtPaid > 0) {
+      status = "partially_paid";
+    }
+  }
+
+  let paymentNotes = notes;
+  if (!paymentNotes) {
+    if (status === "paid") {
+      paymentNotes = "Setup fee paid in full during registration.";
+    } else if (status === "partially_paid") {
+      paymentNotes = `Partial setup fee payment of ₹${amtPaid} recorded during registration.`;
+    } else {
+      paymentNotes = setupFee > 0 ? "Pending collection of setup fee." : "No setup fee applicable.";
+    }
+  }
+
   if (pkg) {
     const nameLower = pkg.name.toLowerCase();
     if (nameLower.includes("basic")) {
@@ -116,12 +156,12 @@ const createHall = async (req, res) => {
     hall_id: hall.id,
     package_id,
     setup_fee_amount: setupFee,
-    amount_paid: 0.00,
-    status: setupFee > 0 ? "unpaid" : "paid",
+    amount_paid: amtPaid,
+    status,
     due_date: getLocalDate(endDate),
-    payment_method: "none",
-    transaction_ref_no: "",
-    notes: setupFee > 0 ? "Pending collection of setup fee." : "No setup fee applicable."
+    payment_method: payment_method || "none",
+    transaction_ref_no: transaction_ref_no || "",
+    notes: paymentNotes
   }]);
 
   if (setupFeeError) console.error("Setup fee payment creation failed:", setupFeeError.message);
@@ -1489,7 +1529,9 @@ const generateCustomAdminInvoice = async (req, res) => {
       tax_enabled = false,
       payment_method = "bank_transfer",
       transaction_ref_no = "",
-      notes = ""
+      notes = "",
+      amount_paid = 0,
+      balance_due
     } = req.body;
 
     if (!hall_id || items.length === 0) {
@@ -1883,6 +1925,23 @@ const generateCustomAdminInvoice = async (req, res) => {
               <td>Total Amount:</td>
               <td style="text-align: right; font-family: monospace;">${fmt(totalAmount)}</td>
             </tr>
+            ${(() => {
+              const amtPaidVal = parseFloat(amount_paid || 0);
+              const balDueVal = balance_due !== undefined ? parseFloat(balance_due) : Math.max(0, totalAmount - amtPaidVal);
+              if (amtPaidVal > 0 || balDueVal > 0) {
+                return `
+                  <tr style="border-top: 1px dashed #cbd5e1;">
+                    <td>Amount Paid:</td>
+                    <td style="text-align: right; color: #16a34a; font-family: monospace;">${fmt(amtPaidVal)}</td>
+                  </tr>
+                  <tr style="font-weight: bold;">
+                    <td>Balance Due:</td>
+                    <td style="text-align: right; color: #b45309; font-family: monospace;">${fmt(balDueVal)}</td>
+                  </tr>
+                `;
+              }
+              return "";
+            })()}
           </table>
         </td>
       </tr>
