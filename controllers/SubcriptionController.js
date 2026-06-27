@@ -21,7 +21,24 @@ const getSubscription = async (req, res) => {
     data.status = "expired";
   }
 
-  res.json(data);
+  // Fetch admin settings for subscription QR pay toggle and UPI ID
+  const { data: adminSettings } = await supabaseAdmin
+    .from("admin_settings")
+    .select("*")
+    .limit(1)
+    .maybeSingle();
+
+  const responseData = {
+    ...data,
+    subscription_qr_enabled: (adminSettings && adminSettings.subscription_qr_enabled !== undefined)
+      ? adminSettings.subscription_qr_enabled
+      : true,
+    subscription_qr_upi_id: (adminSettings && adminSettings.subscription_qr_upi_id)
+      ? adminSettings.subscription_qr_upi_id
+      : "billing@infovex.com"
+  };
+
+  res.json(responseData);
 };
 
 /* Renew/extend subscription */

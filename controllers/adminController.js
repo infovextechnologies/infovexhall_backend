@@ -191,7 +191,7 @@ const getHallById = async (req, res) => {
 
   const { data, error } = await supabaseAdmin
     .from("marriage_halls")
-    .select(`*, hall_subscriptions ( id, status, start_date, end_date, payment_status, packages ( name, price, billing_cycle, features, setup_fee ) ), users ( id, name, email, role, created_at, backup_password_enc )`)
+    .select(`*, hall_subscriptions ( id, status, start_date, end_date, payment_status, packages ( name, price, billing_cycle, features, setup_fee ) ), users ( id, name, email, role, created_at, backup_password_enc ), setup_fee_payments ( id, setup_fee_amount, amount_paid, status, payment_method, transaction_ref_no, notes, updated_at, due_date )`)
     .eq("id", id)
     .single();
 
@@ -895,6 +895,8 @@ const getAdminSettings = async (req, res) => {
         defaultTrialDays: 14,
         invoicePrefix: "INF-HOD-",
         nextInvoiceNumber: 1,
+        subscriptionQrEnabled: true,
+        subscriptionQrUpiId: "billing@infovex.com",
         emailTemplates: {
           welcome:
             "Hello {{owner_name}},\n\nWelcome to Infovex Halls! Your account has been set up successfully.",
@@ -917,6 +919,8 @@ const getAdminSettings = async (req, res) => {
       defaultTrialDays: data.default_trial_days,
       invoicePrefix: data.invoice_prefix,
       nextInvoiceNumber: data.next_invoice_number,
+      subscriptionQrEnabled: data.subscription_qr_enabled !== undefined ? data.subscription_qr_enabled : true,
+      subscriptionQrUpiId: data.subscription_qr_upi_id || "billing@infovex.com",
       emailTemplates: data.email_templates || {},
     });
   } catch (err) {
@@ -936,8 +940,19 @@ const updateAdminSettings = async (req, res) => {
       defaultTrialDays,
       invoicePrefix,
       nextInvoiceNumber,
+      subscriptionQrEnabled,
+      subscriptionQrUpiId,
       emailTemplates,
     } = req.body;
+
+    // Check if the columns exist in DB first to be resilient to migration timing
+    const { data: testData } = await supabaseAdmin
+      .from("admin_settings")
+      .select("*")
+      .limit(1)
+      .maybeSingle();
+
+    const hasQrFields = testData && ('subscription_qr_enabled' in testData);
 
     const payload = {
       company_name: companyName,
@@ -950,6 +965,11 @@ const updateAdminSettings = async (req, res) => {
       email_templates: emailTemplates,
       updated_at: new Date().toISOString(),
     };
+
+    if (hasQrFields) {
+      payload.subscription_qr_enabled = subscriptionQrEnabled !== undefined ? subscriptionQrEnabled : true;
+      payload.subscription_qr_upi_id = subscriptionQrUpiId || "billing@infovex.com";
+    }
 
     if (id) payload.id = id;
 
