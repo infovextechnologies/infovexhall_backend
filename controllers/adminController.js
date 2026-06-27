@@ -881,6 +881,7 @@ const getAdminSettings = async (req, res) => {
     const { data, error } = await supabaseAdmin
       .from("admin_settings")
       .select("*")
+      .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -931,7 +932,7 @@ const getAdminSettings = async (req, res) => {
 
 const updateAdminSettings = async (req, res) => {
   try {
-    const {
+    let {
       id,
       companyName,
       gstin,
@@ -945,10 +946,24 @@ const updateAdminSettings = async (req, res) => {
       emailTemplates,
     } = req.body;
 
+    // Fetch existing settings row to get its ID if not provided, ensuring single-row state
+    if (!id) {
+      const { data: existing } = await supabaseAdmin
+        .from("admin_settings")
+        .select("id")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (existing) {
+        id = existing.id;
+      }
+    }
+
     // Check if the columns exist in DB first to be resilient to migration timing
     const { data: testData } = await supabaseAdmin
       .from("admin_settings")
       .select("*")
+      .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 

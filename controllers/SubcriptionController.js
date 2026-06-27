@@ -25,6 +25,7 @@ const getSubscription = async (req, res) => {
   const { data: adminSettings } = await supabaseAdmin
     .from("admin_settings")
     .select("*")
+    .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
