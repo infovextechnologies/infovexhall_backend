@@ -31,6 +31,7 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const activityLogRoutes = require("./routes/activityLogRoutes");
 const multiHallRoutes = require("./routes/multiHallRoutes");
 const supportRoutes = require("./routes/supportRoutes");
+const muhurthamRoutes = require("./routes/muhurthamRoutes");
 
 const app = express();
 
@@ -82,6 +83,7 @@ app.use("/notifications", notificationRoutes);
 app.use("/activity-logs", activityLogRoutes);
 app.use("/multihall", multiHallRoutes);
 app.use("/support", supportRoutes);
+app.use("/muhurthams", muhurthamRoutes);
 
 // ---- Health check ----
 app.get("/health", (req, res) => {

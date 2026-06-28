@@ -524,50 +524,6 @@ const convertToBooking = async (req, res) => {
       return res.status(400).json({ message: "Cannot convert a lost enquiry" });
     }
 
-    // Check date availability
-    const { data: conflicts } = await supabaseAdmin
-      .from("bookings")
-      .select("id, event_name, start_date, end_date")
-      .eq("hall_id", hall_id)
-      .not("status", "in", '("cancelled","enquiry")')
-      .lte("start_date", end_date)
-      .gte("end_date", start_date);
-
-    if (conflicts && conflicts.length > 0) {
-      return res.status(409).json({
-        message: "Hall is not available for the selected dates",
-        conflicts,
-      });
-    }
-
-    // Find or create customer
-    let customer_id;
-    const { data: existingCustomer } = await supabaseAdmin
-      .from("customers")
-      .select("id")
-      .eq("hall_id", hall_id)
-      .eq("phone", enquiry.phone)
-      .maybeSingle();
-
-    if (existingCustomer) {
-      customer_id = existingCustomer.id;
-    } else {
-      const { data: newCustomer, error: custErr } = await supabaseAdmin
-        .from("customers")
-        .insert([{
-          hall_id,
-          customer_name: enquiry.customer_name,
-          phone: enquiry.phone,
-          email: enquiry.email,
-          notes: `Converted from enquiry #${id}`,
-        }])
-        .select("id")
-        .single();
-
-      if (custErr) return res.status(500).json({ message: custErr.message });
-      customer_id = newCustomer.id;
-    }
-
     // Resolve GST & Tax Settings
     const { getSettingsForHall } = require("./hallSettingsController");
     const settings = await getSettingsForHall(hall_id);
@@ -584,66 +540,32 @@ const convertToBooking = async (req, res) => {
 
     const finalTotalAmount = taxableAmount + finalTaxAmount;
 
-    // Create booking with extra frontend fields (hall_section, guest_count, discount_amount = 0)
-    const today = getLocalDate();
-    const { data: booking, error: bookingErr } = await supabaseAdmin
-      .from("bookings")
-      .insert([{
-        hall_id,
-        customer_id,
-        event_name: event_name || enquiry.event_type || "Event",
-        event_type: enquiry.event_type,
-        start_date,
-        end_date,
-        subtotal: finalSubtotal,
-        tax_enabled: finalTaxEnabled,
-        tax_percentage: finalTaxPercentage,
-        tax_amount: finalTaxAmount,
-        discount_amount: finalDiscount,
-        total_amount: finalTotalAmount,
-        advance_amount: advance_amount || 0,
-        status: "confirmed",
-        notes: notes || enquiry.notes,
-        hall_section: "Main Hall",
-        guest_count: guest_count || enquiry.guest_count || 100,
-      }])
-      .select()
-      .single();
+    // Convert Enquiry atomically via PostgreSQL RPC Function (transaction safe)
+    const { data: bookingId, error: rpcErr } = await supabaseAdmin.rpc(
+      "convert_enquiry_to_booking_transaction",
+      {
+        p_enquiry_id: id,
+        p_hall_id: hall_id,
+        p_event_name: event_name || null,
+        p_start_date: start_date,
+        p_end_date: end_date,
+        p_total_amount: finalSubtotal,
+        p_advance_amount: advance_amount || 0,
+        p_notes: notes || null,
+        p_guest_count: guest_count || null,
+        p_tax_enabled: finalTaxEnabled,
+        p_tax_percentage: finalTaxPercentage,
+        p_tax_amount: finalTaxAmount,
+        p_total_amount_with_tax: finalTotalAmount
+      }
+    );
 
-    if (bookingErr) return res.status(500).json({ message: bookingErr.message });
-
-    // Record advance payment if provided
-    if (advance_amount && advance_amount > 0) {
-      await supabaseAdmin.from("payments").insert([{
-        hall_id,
-        booking_id: booking.id,
-        amount: advance_amount,
-        payment_method: "upi", // default to UPI or map
-        payment_date: today,
-        notes: `Advance payment — converted from enquiry #${enquiry.enquiry_number || id}`,
-      }]);
+    if (rpcErr) {
+      if (rpcErr.message && rpcErr.message.includes("available")) {
+        return res.status(409).json({ message: rpcErr.message });
+      }
+      return res.status(500).json({ message: rpcErr.message });
     }
-
-    // Create calendar event
-    await supabaseAdmin.from("events").insert([{
-      hall_id,
-      booking_id: booking.id,
-      event_title: event_name || enquiry.event_type || "Event",
-      event_date: start_date,
-      start_time: "09:00:00",
-      end_time: "21:00:00",
-    }]);
-
-    // Delete enquiry followups first, then the enquiry itself (no details stored in enquiry/followup tables upon conversion)
-    await supabaseAdmin
-      .from("enquiry_followups")
-      .delete()
-      .eq("enquiry_id", id);
-
-    await supabaseAdmin
-      .from("enquiries")
-      .delete()
-      .eq("id", id);
 
     // Log Activity
     await logActivity({
@@ -653,14 +575,13 @@ const convertToBooking = async (req, res) => {
       action: "enquiry.converted",
       entity_type: "enquiry",
       entity_id: id,
-      description: `Successfully converted enquiry #${enquiry.enquiry_number || id} to booking #${booking.id.slice(0, 8).toUpperCase()}`,
-      metadata: { booking_id: booking.id, customer_id },
+      description: `Successfully converted enquiry #${enquiry.enquiry_number || id} to booking #${bookingId.slice(0, 8).toUpperCase()}`,
+      metadata: { booking_id: bookingId },
     });
 
     res.status(201).json({
       message: "Enquiry converted to booking successfully",
-      booking_id: booking.id,
-      customer_id,
+      booking_id: bookingId,
     });
   } catch (err) {
     console.error("convertToBooking error:", err);
