@@ -1599,10 +1599,10 @@ const generateCustomAdminInvoice = async (req, res) => {
       .limit(1)
       .maybeSingle();
 
-    const companyName = "Infovex Halls";
+    const companyName = "Infovex Technologies";
     const companyGstin = settings?.gstin || "33AAFCI8876F1Z8";
-    const supportPhone = settings?.support_phone || "+91 91801 02030";
-    const supportEmail = settings?.support_email || "billing@infovex.com";
+    const supportPhone = "+91 8681831689";
+    const supportEmail = "contact@infovextech.com";
     const invoicePrefix = settings?.invoice_prefix || "INF-GEN-";
 
     const hallName = hall?.hall_name || "Venue Host";
@@ -2043,9 +2043,8 @@ const generateCustomAdminInvoice = async (req, res) => {
             <div class="address-title">Billed By</div>
             <div class="address-name">${companyName}</div>
             <div class="address-text">
-              12, Ground Floor, Infovex Tech Hub<br>
-              GSTIN: ${companyGstin}<br>
-              Email: ${supportEmail} | Phone: ${supportPhone}
+              Email: ${supportEmail}<br>
+              Phone: ${supportPhone}
             </div>
           </div>
         </td>
