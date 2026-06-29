@@ -196,6 +196,46 @@ const deleteCustomer = async (req, res) => {
       });
     }
 
+    // Fetch all bookings for this customer
+    const { data: bookings } = await supabaseAdmin
+      .from("bookings")
+      .select("id")
+      .eq("customer_id", id);
+
+    const bookingIds = (bookings || []).map((b) => b.id);
+
+    if (bookingIds.length > 0) {
+      // 1. Delete vendor allocations for all these bookings
+      await supabaseAdmin
+        .from("booking_vendors")
+        .delete()
+        .in("booking_id", bookingIds);
+
+      // 2. Delete events for all these bookings
+      await supabaseAdmin
+        .from("events")
+        .delete()
+        .in("booking_id", bookingIds);
+
+      // 3. Delete payments for all these bookings
+      await supabaseAdmin
+        .from("payments")
+        .delete()
+        .in("booking_id", bookingIds);
+
+      // 4. Delete invoices for all these bookings
+      await supabaseAdmin
+        .from("invoices")
+        .delete()
+        .in("booking_id", bookingIds);
+
+      // 5. Finally, delete the bookings themselves
+      await supabaseAdmin
+        .from("bookings")
+        .delete()
+        .in("id", bookingIds);
+    }
+
     const { error } = await supabaseAdmin.from("customers").delete().eq("id", id);
     if (error) return res.status(500).json({ message: error.message });
 
