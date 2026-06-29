@@ -206,43 +206,48 @@ const deleteCustomer = async (req, res) => {
 
     if (bookingIds.length > 0) {
       // 1. Delete vendor allocations for all these bookings
-      await supabaseAdmin
+      const { error: err1 } = await supabaseAdmin
         .from("booking_vendors")
         .delete()
         .in("booking_id", bookingIds);
+      if (err1) return res.status(500).json({ message: `Failed to delete booking vendor allocations: ${err1.message}` });
 
       // 2. Delete events for all these bookings
-      await supabaseAdmin
+      const { error: err2 } = await supabaseAdmin
         .from("events")
         .delete()
         .in("booking_id", bookingIds);
+      if (err2) return res.status(500).json({ message: `Failed to delete booking events: ${err2.message}` });
 
       // 3. Delete payments for all these bookings
-      await supabaseAdmin
+      const { error: err3 } = await supabaseAdmin
         .from("payments")
         .delete()
         .in("booking_id", bookingIds);
+      if (err3) return res.status(500).json({ message: `Failed to delete booking payments: ${err3.message}` });
 
       // 4. Delete invoices for all these bookings
-      await supabaseAdmin
+      const { error: err4 } = await supabaseAdmin
         .from("invoices")
         .delete()
         .in("booking_id", bookingIds);
+      if (err4) return res.status(500).json({ message: `Failed to delete booking invoices: ${err4.message}` });
 
       // 5. Finally, delete the bookings themselves
-      await supabaseAdmin
+      const { error: err5 } = await supabaseAdmin
         .from("bookings")
         .delete()
         .in("id", bookingIds);
+      if (err5) return res.status(500).json({ message: `Failed to delete bookings: ${err5.message}` });
     }
 
-    const { error } = await supabaseAdmin.from("customers").delete().eq("id", id);
-    if (error) return res.status(500).json({ message: error.message });
+    const { error: custErr } = await supabaseAdmin.from("customers").delete().eq("id", id);
+    if (custErr) return res.status(500).json({ message: `Failed to delete customer: ${custErr.message}` });
 
     res.json({ message: "Customer deleted successfully" });
   } catch (err) {
     console.error("deleteCustomer error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: `Server error: ${err.message}` });
   }
 };
 

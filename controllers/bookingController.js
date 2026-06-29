@@ -663,20 +663,24 @@ const deleteBooking = async (req, res) => {
     if (!existing) return res.status(404).json({ message: "Booking not found in your hall" });
 
     // Delete associated vendor allocations
-    await supabaseAdmin.from("booking_vendors").delete().eq("booking_id", id);
+    const { error: err1 } = await supabaseAdmin.from("booking_vendors").delete().eq("booking_id", id);
+    if (err1) return res.status(500).json({ message: `Failed to delete vendor allocations: ${err1.message}` });
 
     // Delete associated events
-    await supabaseAdmin.from("events").delete().eq("booking_id", id);
+    const { error: err2 } = await supabaseAdmin.from("events").delete().eq("booking_id", id);
+    if (err2) return res.status(500).json({ message: `Failed to delete events: ${err2.message}` });
 
     // Delete associated payments
-    await supabaseAdmin.from("payments").delete().eq("booking_id", id);
+    const { error: err3 } = await supabaseAdmin.from("payments").delete().eq("booking_id", id);
+    if (err3) return res.status(500).json({ message: `Failed to delete payments: ${err3.message}` });
 
     // Delete associated invoices
-    await supabaseAdmin.from("invoices").delete().eq("booking_id", id);
+    const { error: err4 } = await supabaseAdmin.from("invoices").delete().eq("booking_id", id);
+    if (err4) return res.status(500).json({ message: `Failed to delete invoices: ${err4.message}` });
 
     // Delete booking
     const { error: deleteError } = await supabaseAdmin.from("bookings").delete().eq("id", id);
-    if (deleteError) return res.status(500).json({ message: deleteError.message });
+    if (deleteError) return res.status(500).json({ message: `Failed to delete booking: ${deleteError.message}` });
 
     // ---- Log Activity ----
     await logActivity({
@@ -692,7 +696,7 @@ const deleteBooking = async (req, res) => {
     res.json({ message: "Booking deleted successfully" });
   } catch (err) {
     console.error("deleteBooking error:", err);
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: `Server error: ${err.message}` });
   }
 };
 
