@@ -102,7 +102,8 @@ const toggleDifferentStaff = async (req, res) => {
       .from("users")
       .select("id, hall_id")
       .in("hall_id", hallIds)
-      .in("role", ["manager", "staff"]);
+      .neq("role", "owner")
+      .neq("role", "super_admin");
 
     if (staffList && staffList.length > 0) {
       if (!enabled) {
@@ -218,7 +219,8 @@ const registerSecondHall = async (req, res) => {
         .from("users")
         .select("id")
         .in("hall_id", hallIds)
-        .in("role", ["manager", "staff"]);
+        .neq("role", "owner")
+        .neq("role", "super_admin");
 
       if (staffList && staffList.length > 0) {
         const links = staffList.map((staff) => ({

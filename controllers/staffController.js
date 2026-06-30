@@ -244,21 +244,36 @@ const getStaff = async (req, res) => {
     const isDifferentStaff = req.user.different_staff_management || false;
     let query;
 
+    // Get all accessible hall IDs for the current user to support scoping properly
+    const { data: ownerHalls, error: ownerHallsError } = await supabaseAdmin
+      .from("user_halls")
+      .select("hall_id")
+      .eq("user_id", req.user.id);
+
+    if (ownerHallsError) return res.status(500).json({ message: ownerHallsError.message });
+    const accessibleHallIds = (ownerHalls || []).map(h => h.hall_id);
+
+    const targetHallIds = hall_id === "all" ? accessibleHallIds : [hall_id];
+
+    if (targetHallIds.length === 0) {
+      return res.json([]);
+    }
+
     if (isDifferentStaff) {
       query = supabaseAdmin
         .from("users")
         .select(selectFields)
-        .eq("hall_id", hall_id)
+        .in("hall_id", targetHallIds)
         .neq("role", "owner");
     } else {
       const { data: linkedUsers, error: linkError } = await supabaseAdmin
         .from("user_halls")
         .select("user_id")
-        .eq("hall_id", hall_id);
+        .in("hall_id", targetHallIds);
 
       if (linkError) return res.status(500).json({ message: linkError.message });
 
-      const userIds = (linkedUsers || []).map((u) => u.user_id);
+      const userIds = [...new Set((linkedUsers || []).map((u) => u.user_id))];
       if (userIds.length === 0) {
         return res.json([]);
       }
