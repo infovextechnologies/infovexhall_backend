@@ -11,7 +11,7 @@ const checkPremiumStatus = async (req, res) => {
       .from("hall_subscriptions")
       .select("package_id, packages(name, features)")
       .eq("hall_id", hall_id)
-      .eq("status", "active")
+      .in("status", ["active", "trial"])
       .gte("end_date", today)
       .maybeSingle();
 
@@ -44,7 +44,7 @@ const toggleMultiHall = async (req, res) => {
         .from("hall_subscriptions")
         .select("package_id, packages(name, features)")
         .eq("hall_id", subscriptionHallId)
-        .eq("status", "active")
+        .in("status", ["active", "trial"])
         .gte("end_date", today)
         .maybeSingle();
 
@@ -150,7 +150,7 @@ const registerSecondHall = async (req, res) => {
       .from("hall_subscriptions")
       .select("package_id, packages(name, features)")
       .eq("hall_id", subscriptionHallId)
-      .eq("status", "active")
+      .in("status", ["active", "trial"])
       .gte("end_date", today)
       .maybeSingle();
 

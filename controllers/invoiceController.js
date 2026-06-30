@@ -366,7 +366,7 @@ const getInvoiceHtml = async (req, res) => {
         .from("hall_subscriptions")
         .select("packages(name, features)")
         .eq("hall_id", hall_id)
-        .eq("status", "active")
+        .in("status", ["active", "trial"])
         .gte("end_date", today)
         .order("created_at", { ascending: false })
         .limit(1)

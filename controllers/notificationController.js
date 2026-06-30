@@ -354,7 +354,7 @@ const generateSystemNotifications = async (req, res) => {
     const { data: expiringSubs } = await supabaseAdmin
       .from("hall_subscriptions")
       .select("id, hall_id, end_date, packages(name)")
-      .eq("status", "active")
+      .in("status", ["active", "trial"])
       .gte("end_date", todayStr)
       .lte("end_date", sevenDaysStr);
 

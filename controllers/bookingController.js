@@ -157,7 +157,7 @@ const createBooking = async (req, res) => {
       .from("hall_subscriptions")
       .select("package_id, packages(max_bookings, name)")
       .eq("hall_id", hall_id)
-      .eq("status", "active")
+      .in("status", ["active", "trial"])
       .gte("end_date", today)
       .maybeSingle();
 

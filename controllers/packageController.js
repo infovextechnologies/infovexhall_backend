@@ -49,7 +49,7 @@ const deletePackage = async (req, res) => {
     .from("hall_subscriptions")
     .select("id", { count: "exact", head: true })
     .eq("package_id", id)
-    .eq("status", "active");
+    .in("status", ["active", "trial"]);
 
   if (count > 0) {
     return res.status(400).json({
