@@ -275,14 +275,20 @@ const getStaff = async (req, res) => {
 
       const userIds = [...new Set((linkedUsers || []).map((u) => u.user_id))];
       if (userIds.length === 0) {
-        return res.json([]);
+        // Fallback: If no links in user_halls yet (e.g. legacy/new users without user_halls mappings),
+        // fallback to query staff directly registered under these hall IDs in the users table
+        query = supabaseAdmin
+          .from("users")
+          .select(selectFields)
+          .in("hall_id", targetHallIds)
+          .neq("role", "owner");
+      } else {
+        query = supabaseAdmin
+          .from("users")
+          .select(selectFields)
+          .in("id", userIds)
+          .neq("role", "owner");
       }
-
-      query = supabaseAdmin
-        .from("users")
-        .select(selectFields)
-        .in("id", userIds)
-        .neq("role", "owner");
     }
 
     if (role && role !== "all") {

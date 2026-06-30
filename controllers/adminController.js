@@ -77,7 +77,7 @@ const createHall = async (req, res) => {
   const cryptoHelper = require("../utils/cryptoHelper");
   const backup_password_enc = cryptoHelper.encrypt(password);
 
-  const { error: userError } = await supabaseAdmin.from("users").insert([{
+  const { data: newUser, error: userError } = await supabaseAdmin.from("users").insert([{
     name: owner_name,
     email: owner_email,
     password: "supabase_auth",
@@ -85,12 +85,20 @@ const createHall = async (req, res) => {
     hall_id: hall.id,
     auth_user_id: authData.user.id,
     backup_password_enc,
-  }]);
+  }]).select().single();
 
   if (userError) {
     await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
     await supabaseAdmin.from("marriage_halls").delete().eq("id", hall.id);
     return res.status(500).json({ message: userError.message });
+  }
+
+  // Link owner to the new hall in user_halls
+  if (newUser) {
+    await supabaseAdmin.from("user_halls").insert([{
+      user_id: newUser.id,
+      hall_id: hall.id,
+    }]);
   }
 
   // 4. Create subscription
