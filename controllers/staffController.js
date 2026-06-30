@@ -97,14 +97,27 @@ const createStaff = async (req, res) => {
     }
 
     if (maxUsers !== null && maxUsers !== undefined) {
-      const { count } = await supabaseAdmin
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .eq("hall_id", hall_id);
+      // Find all accessible hall IDs for the owner
+      const { data: ownerHalls } = await supabaseAdmin
+        .from("user_halls")
+        .select("hall_id")
+        .eq("user_id", req.user.id);
+      
+      const hallIds = [...new Set((ownerHalls || []).map((oh) => oh.hall_id))];
+      if (!hallIds.includes(hall_id)) {
+        hallIds.push(hall_id);
+      }
 
-      if (count >= maxUsers) {
+      // Count unique user IDs linked to these halls
+      const { data: orgUserLinks } = await supabaseAdmin
+        .from("user_halls")
+        .select("user_id")
+        .in("hall_id", hallIds);
+      const uniqueUserIds = [...new Set((orgUserLinks || []).map((ul) => ul.user_id))];
+
+      if (uniqueUserIds.length >= maxUsers) {
         return res.status(403).json({
-          message: `User limit reached. Your ${sub.packages.name} plan allows a maximum of ${maxUsers} users. Please upgrade your plan.`,
+          message: `User limit reached. Your ${sub.packages.name} plan allows a maximum of ${maxUsers} user accounts across your entire organization. Please upgrade your plan.`,
         });
       }
     }

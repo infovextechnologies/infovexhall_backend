@@ -4,8 +4,7 @@ const { logActivity } = require("./activityLogController");
 // Helper to determine max halls supported by a package name
 const getMaxHallsForPlan = (packageName = "") => {
   const name = packageName.toLowerCase();
-  if (name.includes("premium")) return 5;
-  if (name.includes("enterprise")) return 10;
+  if (name.includes("premium") || name.includes("enterprise")) return 2;
   return 1; // Basic plans support only 1 hall
 };
 
@@ -101,6 +100,13 @@ const getOwnerHalls = async (req, res) => {
       });
     }
 
+    // Count unique user IDs linked to these halls
+    const { data: orgUserLinks } = await supabaseAdmin
+      .from("user_halls")
+      .select("user_id")
+      .in("hall_id", hallIds);
+    const uniqueUserIds = [...new Set((orgUserLinks || []).map((ul) => ul.user_id))];
+
     res.json({
       halls: enrichedHalls,
       subscription: {
@@ -110,6 +116,7 @@ const getOwnerHalls = async (req, res) => {
         maxHalls,
         currentHalls: enrichedHalls.length,
         remainingHalls: Math.max(0, maxHalls - enrichedHalls.length),
+        totalOrganizationUsers: uniqueUserIds.length,
       },
     });
   } catch (err) {
