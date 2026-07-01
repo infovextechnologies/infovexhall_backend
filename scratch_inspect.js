@@ -1,14 +1,24 @@
-const fs = require('fs');
-const file = 'd:/INFOVEX_PRODUCT/HALLFLOW/HALLS_ON_DESK/hallflow_backend/controllers/invoiceController.js';
+require("dotenv").config();
+const { supabaseAdmin } = require('./config/supabase');
 
-if (fs.existsSync(file)) {
-  const content = fs.readFileSync(file, 'utf8');
-  const lines = content.split('\n');
-  lines.forEach((line, idx) => {
-    if (line.includes('const createReceipt')) {
-      console.log(`${idx + 1}: ${line.trim()}`);
+async function checkColumns() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('hall_settings')
+      .select('*');
+    
+    if (error) {
+      console.error("Supabase query error:", error);
+    } else {
+      console.log("Total settings rows:", data?.length);
+      if (data && data.length > 0) {
+        console.log("Keys in DB row:", Object.keys(data[0]));
+        console.log("invoice_template value of first row:", data[0].invoice_template);
+      }
     }
-  });
-} else {
-  console.log("File not found");
+  } catch (err) {
+    console.error("Error:", err);
+  }
 }
+
+checkColumns();
