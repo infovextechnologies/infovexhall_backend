@@ -12,7 +12,9 @@ const {
   getInvoices,
   updateInvoiceStatus,
   getInvoiceHtml,
+  getInvoicePdf,
   createReceipt,
+  getReceiptPdf,
   deleteInvoice,
   exportGstr1Report,
 } = require("../controllers/invoiceController");
@@ -39,8 +41,14 @@ router.delete("/:id", ...hasPermission("delete_bookings"), deleteInvoice);
 // No JSON header — returns text/html directly for iframe or print window
 router.get("/:id/html", ...hasPermission("view_payments"), getInvoiceHtml);
 
+// ---- PDF invoice — returns compiled high-fidelity vector PDF ----
+router.get("/:id/pdf", ...hasPermission("view_payments"), getInvoicePdf);
+
 // ---- Payment receipt ----
 // Returns printable HTML receipt for a single payment
 router.get("/receipt/:payment_id", ...hasPermission("view_payments"), createReceipt);
+
+// ---- PDF receipt — returns compiled vector PDF receipt ----
+router.get("/receipt/:payment_id/pdf", ...hasPermission("view_payments"), getReceiptPdf);
 
 module.exports = router;

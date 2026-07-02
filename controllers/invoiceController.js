@@ -1,6 +1,40 @@
 const { supabaseAdmin } = require("../config/supabase");
 const { getSettingsForHall } = require("./hallSettingsController");
 const { getLocalDate } = require("../utils/dateHelper");
+const puppeteer = require("puppeteer");
+
+// Headless Chrome PDF compiler to render styled HTML templates to vector PDF buffers
+const renderHtmlToPdf = async (html) => {
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: {
+        top: "10mm",
+        right: "10mm",
+        bottom: "10mm",
+        left: "10mm"
+      }
+    });
+    return pdfBuffer;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+};
 
 const formatToDDMMYYYY = (dateString) => {
   if (!dateString) return "";
@@ -379,94 +413,90 @@ const updateInvoiceStatus = async (req, res) => {
    GET INVOICE HTML (for PDF generation or print)
    Returns a clean HTML string the frontend can print or convert
    ============================================================ */
-const getInvoiceHtml = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const hall_id = req.user.hall_id;
+const buildInvoiceHtmlContent = async (id, hall_id) => {
+  const { data: inv, error } = await supabaseAdmin
+    .from("invoices")
+    .select("*")
+    .eq("id", id)
+    .eq("hall_id", hall_id)
+    .single();
 
-    const { data: inv, error } = await supabaseAdmin
-      .from("invoices")
-      .select("*")
-      .eq("id", id)
+  if (error || !inv) throw new Error("Invoice not found");
+
+  // Format all dates to DD/MM/YYYY for render display
+  inv.invoice_date = formatToDDMMYYYY(inv.invoice_date);
+  inv.due_date = formatToDDMMYYYY(inv.due_date);
+  inv.event_date = formatToDDMMYYYY(inv.event_date);
+  inv.event_end_date = formatToDDMMYYYY(inv.event_end_date);
+
+  // Fetch active subscription, template settings, and bank details from profile
+  const today = getLocalDate();
+  const [subRes, settingsRes, profileRes] = await Promise.all([
+    supabaseAdmin
+      .from("hall_subscriptions")
+      .select("packages(name, features)")
       .eq("hall_id", hall_id)
-      .single();
+      .in("status", ["active", "trial"])
+      .gte("end_date", today)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("hall_settings")
+      .select("invoice_template")
+      .eq("hall_id", hall_id)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("hall_profiles")
+      .select("bank_name, account_number, ifsc_code, upi_id")
+      .eq("hall_id", hall_id)
+      .maybeSingle()
+  ]);
 
-    if (error) return res.status(404).json({ message: "Invoice not found" });
+  const sub = subRes?.data;
+  const packageName = sub?.packages?.name || "";
+  const isPremium = packageName.toLowerCase().includes("premium") || 
+                    packageName.toLowerCase().includes("deluxe") ||
+                    packageName.toLowerCase().includes("standard") || 
+                    packageName.toLowerCase().includes("transformation") ||
+                    sub?.packages?.features?.invoice_templates ||
+                    false;
 
-    // Format all dates to DD/MM/YYYY for render display
-    inv.invoice_date = formatToDDMMYYYY(inv.invoice_date);
-    inv.due_date = formatToDDMMYYYY(inv.due_date);
-    inv.event_date = formatToDDMMYYYY(inv.event_date);
-    inv.event_end_date = formatToDDMMYYYY(inv.event_end_date);
+  let template = (settingsRes?.data?.invoice_template || "classic").toLowerCase();
+  if (!isPremium) {
+    template = "classic"; // Restrict basic tier users to classic/default template
+  }
 
-    // Fetch active subscription, template settings, and bank details from profile
-    const today = getLocalDate();
-    const [subRes, settingsRes, profileRes] = await Promise.all([
-      supabaseAdmin
-        .from("hall_subscriptions")
-        .select("packages(name, features)")
-        .eq("hall_id", hall_id)
-        .in("status", ["active", "trial"])
-        .gte("end_date", today)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabaseAdmin
-        .from("hall_settings")
-        .select("invoice_template")
-        .eq("hall_id", hall_id)
-        .maybeSingle(),
-      supabaseAdmin
-        .from("hall_profiles")
-        .select("bank_name, account_number, ifsc_code, upi_id")
-        .eq("hall_id", hall_id)
-        .maybeSingle()
-    ]);
+  const bankDetails = profileRes?.data || {};
+  const symbol = inv.currency_symbol || "₹";
+  const fmt = (n) => `${symbol}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
 
-    const sub = subRes?.data;
-    const packageName = sub?.packages?.name || "";
-    const isPremium = packageName.toLowerCase().includes("premium") || 
-                      packageName.toLowerCase().includes("deluxe") ||
-                      packageName.toLowerCase().includes("standard") || 
-                      packageName.toLowerCase().includes("transformation") ||
-                      sub?.packages?.features?.invoice_templates ||
-                      false;
+  // Generate UPI URL & QR Code URL if UPI ID exists and there's a balance due
+  const upiString = bankDetails.upi_id && inv.balance_due > 0
+    ? `upi://pay?pa=${encodeURIComponent(bankDetails.upi_id)}&am=${encodeURIComponent(inv.balance_due)}&tn=${encodeURIComponent(inv.invoice_number)}&pn=${encodeURIComponent(inv.hall_name || "Marriage Hall")}`
+    : "";
+  const qrCodeUrl = upiString
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(upiString)}`
+    : "";
 
-    let template = (settingsRes?.data?.invoice_template || "classic").toLowerCase();
-    if (!isPremium) {
-      template = "classic"; // Restrict basic tier users to classic/default template
-    }
+  let html = "";
 
-    const bankDetails = profileRes?.data || {};
-    const symbol = inv.currency_symbol || "₹";
-    const fmt = (n) => `${symbol}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+  // Render based on selected template
+  if (template === "modern") {
+    // PREMIUM TEMPLATE 1: MODERN / DIGITAL CAPSULE
+    const lineItemsModern = (inv.line_items || [])
+      .map(
+        (item) => `
+        <tr style="border-bottom: 1px solid #f1f5f9;">
+          <td style="padding: 14px 16px; color: #1e293b; font-weight: 500;">${item.description || ""}</td>
+          <td style="padding: 14px 16px; text-align: center; color: #64748b;">${item.quantity || 1}</td>
+          <td style="padding: 14px 16px; text-align: right; color: #475569; font-family: monospace;">${fmt(item.unit_price)}</td>
+          <td style="padding: 14px 16px; text-align: right; color: #0f172a; font-weight: 600; font-family: monospace;">${fmt(item.amount)}</td>
+        </tr>`
+      )
+      .join("");
 
-    // Generate UPI URL & QR Code URL if UPI ID exists and there's a balance due
-    const upiString = bankDetails.upi_id && inv.balance_due > 0
-      ? `upi://pay?pa=${encodeURIComponent(bankDetails.upi_id)}&am=${encodeURIComponent(inv.balance_due)}&tn=${encodeURIComponent(inv.invoice_number)}&pn=${encodeURIComponent(inv.hall_name || "Marriage Hall")}`
-      : "";
-    const qrCodeUrl = upiString
-      ? `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(upiString)}`
-      : "";
-
-    let html = "";
-
-    // Render based on selected template
-    if (template === "modern") {
-      // PREMIUM TEMPLATE 1: MODERN / DIGITAL CAPSULE
-      const lineItemsModern = (inv.line_items || [])
-        .map(
-          (item) => `
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 14px 16px; color: #1e293b; font-weight: 500;">${item.description || ""}</td>
-            <td style="padding: 14px 16px; text-align: center; color: #64748b;">${item.quantity || 1}</td>
-            <td style="padding: 14px 16px; text-align: right; color: #475569; font-family: monospace;">${fmt(item.unit_price)}</td>
-            <td style="padding: 14px 16px; text-align: right; color: #0f172a; font-weight: 600; font-family: monospace;">${fmt(item.amount)}</td>
-          </tr>`
-        )
-        .join("");
-
-      html = `<!DOCTYPE html>
+    html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -479,110 +509,107 @@ const getInvoiceHtml = async (req, res) => {
   .wrapper { max-width: 800px; margin: 0 auto; }
   .badge { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid transparent; }
   .badge-paid { background-color: #ecfdf5; color: #059669; border-color: #a7f3d0; }
-  .badge-unpaid { background-color: #fef2f2; color: #dc2626; border-color: #fecaca; }
+  .badge-unpaid { background-color: #fef2f2; color: #dc2626; border-color: #fca5a5; }
   .badge-partial { background-color: #fffbeb; color: #d97706; border-color: #fde68a; }
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
-  .info-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 24px; }
-  th { background-color: #f1f5f9; color: #475569; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 12px 16px; text-align: left; }
-  .totals-box { margin-left: auto; width: 300px; margin-top: 24px; padding: 16px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; }
-  .totals-row { display: flex; justify-content: space-between; padding: 6px 0; color: #64748b; font-weight: 500; }
-  .totals-row.grand { border-top: 1px solid #e2e8f0; margin-top: 8px; padding-top: 12px; color: #0f172a; font-weight: 800; font-size: 15px; }
-  .totals-row.balance { color: #6366f1; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 32px; }
+  .card { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
+  .card-title { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+  .card-item { margin-bottom: 6px; font-size: 12.5px; color: #475569; }
+  .card-item strong { color: #0f172a; }
+  table { width: 100%; border-collapse: collapse; margin-top: 32px; }
+  th { background-color: #f8fafc; border-bottom: 2px solid #6366f1; color: #0f172a; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 14px 16px; text-align: left; }
+  .totals-box { margin-left: auto; width: 300px; margin-top: 32px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; }
+  .totals-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; color: #475569; }
+  .totals-row.grand { border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 8px; font-weight: 700; color: #0f172a; font-size: 14px; }
+  .totals-row.grand.balance { color: #6366f1; font-size: 16px; border-top: 2px solid #6366f1; }
   @media print {
     @page { size: auto; margin: 15mm; }
     body { background-color: #ffffff; padding: 0; }
     .wrapper { max-width: 100%; }
-    .wrapper, .info-card, .totals-box, .totals-row, tr { page-break-inside: avoid; }
-    table { page-break-inside: auto; }
+    .card, .totals-box, tr, table { page-break-inside: avoid; }
     thead { display: table-header-group; }
-    .brand-footer { page-break-inside: avoid; }
   }
 </style>
 </head>
 <body>
   <div class="wrapper">
-    <!-- Brand Logo & Header -->
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px;">
+    
+    <!-- Modern Header -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #6366f1; padding-bottom: 24px;">
       <div>
-        ${inv.hall_logo_url ? `<img src="${inv.hall_logo_url}" alt="Logo" style="height: 56px; max-width: 180px; object-fit: contain; margin-bottom: 12px; display: block; border-radius: 8px;">` : `<div style="height: 48px; width: 48px; background: #0F172A; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: 800; font-size: 18px; margin-bottom: 12px;">${(inv.hall_name || "H").slice(0,1)}</div>`}
-        <h1 style="font-size: 20px; font-weight: 800; color: #0F172A; letter-spacing: -0.02em;">${inv.hall_name || "Hall Workspace"}</h1>
-        <p style="color: #64748b; font-size: 12px; margin-top: 4px; line-height: 1.5;">
+        ${inv.hall_logo_url ? `<img src="${inv.hall_logo_url}" alt="Logo" style="height: 56px; max-width: 220px; object-fit: contain; margin-bottom: 12px; display: block;">` : ""}
+        <h1 style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px;">${inv.hall_name || "Marriage Hall"}</h1>
+        <p style="color: #64748b; font-size: 12px; margin-top: 6px; line-height: 1.6;">
           ${inv.hall_address ? inv.hall_address : ""}<br>
-          ${inv.hall_phone ? `Phone: ${inv.hall_phone}` : ""} ${inv.hall_email ? `• Email: ${inv.hall_email}` : ""}<br>
+          ${inv.hall_phone ? `Phone: ${inv.hall_phone}` : ""} | ${inv.hall_email ? `Email: ${inv.hall_email}` : ""}<br>
           ${inv.hall_gstin ? `<strong>GSTIN:</strong> ${inv.hall_gstin}` : ""}
         </p>
       </div>
-      <div style="text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
-        <span class="badge badge-${inv.status}">${inv.status}</span>
-        <h2 style="font-size: 28px; font-weight: 800; color: #0F172A; margin-top: 8px; letter-spacing: -1px;">INVOICE</h2>
-        <p style="font-size: 12px; color: #64748b; font-weight: 600; font-family: monospace; margin-top: 4px;"># ${inv.invoice_number}</p>
-        <div style="margin-top: 16px; font-size: 11px; color: #475569; line-height: 1.6;">
-          <strong>Date:</strong> ${inv.invoice_date}<br>
-          ${inv.due_date ? `<strong>Due Date:</strong> ${inv.due_date}` : ""}
-        </div>
+      <div style="text-align: right;">
+        <span class="badge badge-${inv.status}" style="margin-bottom: 12px;">${inv.status}</span>
+        <h2 style="font-size: 28px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px;">INVOICE</h2>
+        <p style="font-size: 14px; font-weight: 700; color: #6366f1; margin-top: 4px;"># ${inv.invoice_number}</p>
       </div>
     </div>
 
-    <!-- Parties Details cards -->
-    <div class="grid-2" style="margin-bottom: 40px;">
-      <div class="info-card">
-        <h4 style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #7C3AED; letter-spacing: 1px; margin-bottom: 8px;">Bill To</h4>
-        <div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">${inv.customer_name || ""}</div>
-        <p style="color: #475569; font-size: 11.5px; line-height: 1.6;">
-          ${inv.customer_phone ? `Phone: ${inv.customer_phone}<br>` : ""}
-          ${inv.customer_email ? `Email: ${inv.customer_email}<br>` : ""}
-          ${inv.customer_address || ""}
-        </p>
+    <!-- Info Cards Grid -->
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-title">Invoice Details</div>
+        <div class="card-item"><strong>Date:</strong> ${inv.invoice_date}</div>
+        <div class="card-item"><strong>Due Date:</strong> ${inv.due_date || "On Receipt"}</div>
+        <div class="card-item"><strong>Billing Cycle:</strong> One-Time</div>
+      </div>
+      
+      <div class="card">
+        <div class="card-title">Billed To</div>
+        <div class="card-item" style="font-weight: 700; color: #0f172a; margin-bottom: 8px;">${inv.customer_name || ""}</div>
+        <div class="card-item">${inv.customer_phone ? `Phone: ${inv.customer_phone}` : ""}</div>
+        <div class="card-item">${inv.customer_email ? `Email: ${inv.customer_email}` : ""}</div>
+        <div class="card-item" style="font-size: 11.5px; line-height: 1.4; margin-top: 4px;">${inv.customer_address || ""}</div>
       </div>
 
-      <div class="info-card">
-        <h4 style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #7C3AED; letter-spacing: 1px; margin-bottom: 8px;">Event Specification</h4>
-        <div style="font-size: 13px; font-weight: 700; color: #0f172a; margin-bottom: 4px;">${inv.event_name || inv.event_type || ""}</div>
-        <p style="color: #475569; font-size: 11.5px; line-height: 1.6;">
-          <strong>Date:</strong> ${inv.event_date} ${inv.event_end_date && inv.event_end_date !== inv.event_date ? ` to ${inv.event_end_date}` : ""}<br>
-          <strong>Category:</strong> ${inv.event_type || "Banquet Setup"}<br>
-          <strong>Venue Unit:</strong> ${inv.hall_section || "Main Hall"}
-        </p>
+      <div class="card">
+        <div class="card-title">Event Context</div>
+        <div class="card-item"><strong>Event:</strong> ${inv.event_name || inv.event_type || ""}</div>
+        <div class="card-item"><strong>Type:</strong> ${inv.event_type || ""}</div>
+        <div class="card-item"><strong>Schedules:</strong> ${inv.event_date}${inv.event_end_date && inv.event_end_date !== inv.event_date ? " to " + inv.event_end_date : ""}</div>
       </div>
     </div>
 
-    <!-- Table list -->
-    <div style="border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: #ffffff;">
-      <table>
-        <thead>
-          <tr>
-            <th style="padding: 12px 16px;">Item Description</th>
-            <th style="padding: 12px 16px; text-align: center;">Qty</th>
-            <th style="padding: 12px 16px; text-align: right;">Unit Price</th>
-            <th style="padding: 12px 16px; text-align: right;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${lineItemsModern}
-        </tbody>
-      </table>
-    </div>
+    <!-- Line Items Table -->
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align: left;">Description</th>
+          <th style="text-align: center; width: 60px;">Qty</th>
+          <th style="text-align: right; width: 120px;">Unit Price</th>
+          <th style="text-align: right; width: 140px;">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lineItemsModern}
+      </tbody>
+    </table>
 
-    <!-- Bottom Calculations & Bank Transfer Instructions -->
+    <!-- Payment & Remittance Instructions + Totals block -->
     <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 32px;">
-      <div style="flex: 1; max-width: 420px; font-size: 11px; color: #64748b; line-height: 1.6; padding-right: 24px;">
-        ${inv.notes ? `<div style="background-color: #f8fafc; border-left: 3px solid #0F172A; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 11.5px; color: #1e293b;"><strong>Operational Notes:</strong><br>${inv.notes}</div>` : ""}
+      <div style="flex: 1; padding-right: 32px;">
+        ${inv.notes ? `<div style="background-color: #f8fafc; border-left: 4px solid #6366f1; border-radius: 4px; padding: 12px 16px; margin-bottom: 20px; font-size: 12.5px; color: #475569;"><strong>Notes:</strong><br>${inv.notes}</div>` : ""}
         
-        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 14px 16px; border-radius: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
-            <div>
-              <strong style="color: #0F172A; text-transform: uppercase; font-size: 9.5px; display: block; margin-bottom: 8px; letter-spacing: 0.5px;">Bank Transfer / Payment Instructions</strong>
+        <div style="background-color: #f8fafc; border: 1px dashed #6366f1; border-radius: 8px; padding: 16px; font-size: 12px; color: #475569;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="flex: 1;">
+              <strong style="color: #0f172a; text-transform: uppercase; font-size: 10px; display: block; margin-bottom: 8px; letter-spacing: 0.5px;">Remittance & Bank Details</strong>
               ${bankDetails.bank_name ? `<strong>Bank Name:</strong> ${bankDetails.bank_name}<br>` : ""}
               ${bankDetails.account_number ? `<strong>Account Number:</strong> ${bankDetails.account_number}<br>` : ""}
               ${bankDetails.ifsc_code ? `<strong>IFSC Code:</strong> ${bankDetails.ifsc_code}<br>` : ""}
-              ${bankDetails.upi_id ? `<strong>UPI ID:</strong> <span style="font-family: monospace; font-weight: 600; color: #0f172a;">${bankDetails.upi_id}</span>` : ""}
+              ${bankDetails.upi_id ? `<strong>UPI ID:</strong> <span style="font-family: monospace; font-weight: 600;">${bankDetails.upi_id}</span>` : ""}
               ${!bankDetails.bank_name && !bankDetails.upi_id ? `<em style="color: #94a3b8;">Contact venue managers for payment remittance details.</em>` : ""}
             </div>
             ${qrCodeUrl ? `
             <div style="text-align: center; border-left: 1px solid #e2e8f0; padding-left: 16px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
               <img src="${qrCodeUrl}" alt="UPI Scan to Pay" style="width: 90px; height: 90px; display: block;" />
-              <span style="font-size: 9px; font-weight: 700; color: #6366f1; margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase;">Scan to Pay</span>
             </div>
             ` : ""}
           </div>
@@ -590,46 +617,37 @@ const getInvoiceHtml = async (req, res) => {
       </div>
       
       <div class="totals-box">
-        <div class="totals-row"><span>Subtotal</span><span style="font-family: monospace;">${fmt(inv.subtotal)}</span></div>
-        ${inv.discount_amount ? `<div class="totals-row" style="color: #dc2626;"><span>Discount</span><span style="font-family: monospace;">- ${fmt(inv.discount_amount)}</span></div>` : ""}
-        
+        <div class="totals-row"><span>Subtotal</span><span>${fmt(inv.subtotal)}</span></div>
+        ${inv.discount_amount ? `<div class="totals-row" style="color: #dc2626;"><span>Discount</span><span>- ${fmt(inv.discount_amount)}</span></div>` : ""}
         ${inv.tax_enabled ? (inv.tax_label && inv.tax_label.toUpperCase() === "GST" ? `
-          <div class="totals-row"><span>CGST (${inv.tax_percentage / 2}%)</span><span style="font-family: monospace;">${fmt(inv.tax_amount / 2)}</span></div>
-          <div class="totals-row"><span>SGST (${inv.tax_percentage / 2}%)</span><span style="font-family: monospace;">${fmt(inv.tax_amount / 2)}</span></div>
+          <div class="totals-row"><span>CGST (${inv.tax_percentage / 2}%)</span><span>${fmt(inv.tax_amount / 2)}</span></div>
+          <div class="totals-row"><span>SGST (${inv.tax_percentage / 2}%)</span><span>${fmt(inv.tax_amount / 2)}</span></div>
         ` : `
-          <div class="totals-row"><span>${inv.tax_label || "Tax"} (${inv.tax_percentage}%)</span><span style="font-family: monospace;">${fmt(inv.tax_amount)}</span></div>
+          <div class="totals-row"><span>${inv.tax_label || "Tax"} (${inv.tax_percentage}%)</span><span>${fmt(inv.tax_amount)}</span></div>
         `) : ""}
-        
-        <div class="totals-row grand"><span>Total</span><span style="font-family: monospace;">${fmt(inv.total_amount)}</span></div>
-        ${inv.amount_paid > 0 ? `<div class="totals-row" style="color: #059669; font-size: 11.5px; border-top: 1px dashed #e2e8f0; margin-top: 6px; padding-top: 8px;"><span>Amount Paid</span><span style="font-family: monospace;">- ${fmt(inv.amount_paid)}</span></div>` : ""}
-        <div class="totals-row grand balance"><span>Balance Due</span><span style="font-family: monospace;">${fmt(inv.balance_due)}</span></div>
+        <div class="totals-row grand"><span>Total</span><span>${fmt(inv.total_amount)}</span></div>
+        ${inv.amount_paid > 0 ? `<div class="totals-row" style="color: #059669;"><span>Paid</span><span>- ${fmt(inv.amount_paid)}</span></div>` : ""}
+        <div class="totals-row grand balance"><span>Balance Due</span><span>${fmt(inv.balance_due)}</span></div>
       </div>
-    </div>
-
-    <!-- Premium Brand Footer -->
-    <div class="brand-footer" style="margin-top: 60px; padding-top: 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #94a3b8; font-weight: 500;">
-      <span>Powered by <strong style="color: #475569;">Infovex Halls</strong> — India's First Dedicated Venue CRM</span>
-      <span>by <strong style="color: #475569;">Infovex Technologies</strong></span>
     </div>
   </div>
 </body>
 </html>`;
+  } else if (template === "elegant") {
+    // PREMIUM TEMPLATE 2: ELEGANT / LUXURY WEDDING GOLD & NAVY
+    const lineItemsElegant = (inv.line_items || [])
+      .map(
+        (item) => `
+        <tr style="border-bottom: 1px double #e2e8f0;">
+          <td style="padding: 12px 8px; color: #0F172A; font-family: 'Montserrat', sans-serif; font-size: 12px; font-weight: 600;">${item.description || ""}</td>
+          <td style="padding: 12px 8px; text-align: center; color: #5c6f84; font-family: 'Montserrat', sans-serif;">${item.quantity || 1}</td>
+          <td style="padding: 12px 8px; text-align: right; color: #5c6f84; font-family: 'Montserrat', sans-serif;">${fmt(item.unit_price)}</td>
+          <td style="padding: 12px 8px; text-align: right; color: #0F172A; font-weight: 750; font-family: 'Montserrat', sans-serif;">${fmt(item.amount)}</td>
+        </tr>`
+      )
+      .join("");
 
-    } else if (template === "elegant") {
-      // PREMIUM TEMPLATE 2: ELEGANT / LUXURY WEDDING GOLD & NAVY
-      const lineItemsElegant = (inv.line_items || [])
-        .map(
-          (item) => `
-          <tr style="border-bottom: 1px double #e2e8f0;">
-            <td style="padding: 12px 8px; color: #0F172A; font-family: 'Montserrat', sans-serif; font-size: 12px; font-weight: 600;">${item.description || ""}</td>
-            <td style="padding: 12px 8px; text-align: center; color: #5c6f84; font-family: 'Montserrat', sans-serif;">${item.quantity || 1}</td>
-            <td style="padding: 12px 8px; text-align: right; color: #5c6f84; font-family: 'Montserrat', sans-serif;">${fmt(item.unit_price)}</td>
-            <td style="padding: 12px 8px; text-align: right; color: #0F172A; font-weight: 750; font-family: 'Montserrat', sans-serif;">${fmt(item.amount)}</td>
-          </tr>`
-        )
-        .join("");
-
-      html = `<!DOCTYPE html>
+    html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -640,88 +658,61 @@ const getInvoiceHtml = async (req, res) => {
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background-color: #ffffff; color: #2d3748; padding: 50px; font-family: 'Montserrat', sans-serif; font-size: 12.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .wrapper { max-width: 800px; margin: 0 auto; border: 1px solid #d4af37; padding: 40px; position: relative; background: #fffcf9; }
-  .wrapper::before { content: ""; position: absolute; top: 8px; left: 8px; right: 8px; bottom: 8px; border: 1px solid #e0c878; pointer-events: none; }
   .gold-divider { height: 1px; background: linear-gradient(to right, transparent, #d4af37, transparent); margin: 24px 0; }
   .elegant-title { font-family: 'Playfair Display', serif; font-size: 32px; font-weight: 700; color: #0F172A; letter-spacing: 2px; text-transform: uppercase; }
-  .sub-title { font-family: 'Playfair Display', serif; font-size: 18px; color: #b89230; font-style: italic; margin-top: 4px; }
   .section-heading { font-family: 'Playfair Display', serif; font-size: 11px; font-weight: 700; text-transform: uppercase; color: #b89230; letter-spacing: 1.5px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 10px; }
   table { width: 100%; border-collapse: collapse; margin-top: 16px; }
   th { border-bottom: 2px solid #b89230; border-top: 1px solid #e2e8f0; color: #0F172A; font-family: 'Playfair Display', serif; font-weight: 700; font-size: 12px; padding: 12px 8px; text-align: left; background: transparent; }
   .totals-elegant { margin-left: auto; width: 270px; margin-top: 24px; font-size: 12.5px; }
   .totals-row-el { display: flex; justify-content: space-between; padding: 6px 0; color: #4a5568; }
-  .totals-row-el.bold { font-weight: 700; color: #0F172A; }
-  .totals-row-el.grand-el { border-top: 1px solid #b89230; border-bottom: 1px solid #b89230; padding: 10px 0; margin-top: 8px; font-family: 'Playfair Display', serif; font-size: 16px; font-weight: 700; color: #0F172A; }
   .status-label { font-family: 'Playfair Display', serif; font-style: italic; color: #b89230; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
   @media print {
     @page { size: auto; margin: 15mm; }
     body { background-color: #ffffff; padding: 0; }
-    .wrapper { border: none; padding: 20px; max-width: 100%; }
-    .wrapper::before { display: none; }
-    .totals-elegant, .totals-row-el, tr, .gold-divider { page-break-inside: avoid; }
-    table { page-break-inside: auto; }
-    thead { display: table-header-group; }
+    .wrapper { border: none; padding: 20px; }
   }
 </style>
 </head>
 <body>
   <div class="wrapper">
-    
-    <!-- Decorative Header Block -->
     <div style="display: flex; justify-content: space-between; align-items: flex-start;">
       <div>
-        ${inv.hall_logo_url ? `<img src="${inv.hall_logo_url}" alt="Logo" style="height: 60px; max-width: 200px; object-fit: contain; margin-bottom: 12px; display: block;">` : ""}
         <div class="elegant-title">${inv.hall_name || "Marriage Hall"}</div>
-        <div class="sub-title">Grand Wedding & Banquets Venue</div>
         <p style="color: #5c6f84; font-size: 11px; margin-top: 8px; line-height: 1.6;">
-          ${inv.hall_address ? inv.hall_address : ""}<br>
-          ${inv.hall_phone ? `Call: ${inv.hall_phone}` : ""} • ${inv.hall_email ? `Email: ${inv.hall_email}` : ""}<br>
+          ${inv.hall_address || ""}<br>
+          ${inv.hall_phone || ""} • ${inv.hall_email || ""}<br>
           ${inv.hall_gstin ? `<strong>GSTIN:</strong> ${inv.hall_gstin}` : ""}
         </p>
       </div>
-      <div style="text-align: right;">
-        <h2 style="font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 400; color: #0F172A; letter-spacing: 2px;">RECEIPT INVOICE</h2>
-        <p style="font-family: 'Playfair Display', serif; color: #b89230; font-size: 13px; font-weight: 700; margin-top: 4px;"># ${inv.invoice_number}</p>
-        
-        <div style="margin-top: 20px; font-size: 11px; color: #5c6f84; line-height: 1.5; font-family: 'Montserrat', sans-serif;">
-          <strong>Invoice Date:</strong> ${inv.invoice_date}<br>
-          ${inv.due_date ? `<strong>Due Date:</strong> ${inv.due_date}<br>` : ""}
-          <strong>Payment Status:</strong> <span class="status-label">${inv.status}</span>
-        </div>
+      <div style="text-align: right; border-left: 1px solid #e0c878; padding-left: 20px;">
+        <span class="status-label">${inv.status}</span>
+        <h2 style="font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 700; letter-spacing: 1px; color: #0F172A; margin-top: 10px;">INVOICE</h2>
+        <p style="font-family: monospace; font-size: 13px; font-weight: 700; color: #b89230; margin-top: 4px;"># ${inv.invoice_number}</p>
+        <p style="color: #5c6f84; font-size: 11px; margin-top: 12px;">Date: ${inv.invoice_date}</p>
       </div>
     </div>
 
     <div class="gold-divider"></div>
 
-    <!-- Client Details Section -->
-    <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px;">
-      <div>
-        <div class="section-heading">Prepared for Guest</div>
-        <div style="font-size: 14px; font-weight: 700; color: #0F172A; margin-bottom: 4px; font-family: 'Playfair Display', serif;">${inv.customer_name || ""}</div>
-        <p style="color: #4a5568; font-size: 11px; line-height: 1.6;">
-          ${inv.customer_phone ? `Phone: ${inv.customer_phone}<br>` : ""}
-          ${inv.customer_email ? `Email: ${inv.customer_email}<br>` : ""}
-          ${inv.customer_address || ""}
-        </p>
+    <div style="display: flex; justify-content: space-between; gap: 40px;">
+      <div style="flex: 1;">
+        <div class="section-heading">Billed To</div>
+        <strong style="font-family: 'Playfair Display', serif; font-size: 14px; color: #0F172A; display: block; margin-bottom: 6px;">${inv.customer_name || ""}</strong>
+        <p style="color: #5c6f84; font-size: 11.5px; line-height: 1.5;">${inv.customer_address || ""}</p>
       </div>
-      <div>
+      <div style="flex: 1;">
         <div class="section-heading">Event Particulars</div>
-        <div style="font-size: 13px; font-weight: 700; color: #0F172A; margin-bottom: 4px; font-family: 'Playfair Display', serif;">${inv.event_name || inv.event_type || ""}</div>
-        <p style="color: #4a5568; font-size: 11px; line-height: 1.6;">
-          <strong>Date:</strong> ${inv.event_date} ${inv.event_end_date && inv.event_end_date !== inv.event_date ? ` to ${inv.event_end_date}` : ""}<br>
-          <strong>Category:</strong> ${inv.event_type || "Wedding Reception"}<br>
-          <strong>Venue Unit:</strong> ${inv.hall_section || "Grand A/C Hall"}
-        </p>
+        <p style="color: #0f172a; font-weight: 700; font-size: 13px; font-family: 'Playfair Display', serif;">${inv.event_name || inv.event_type || ""}</p>
       </div>
     </div>
 
-    <!-- Line Items Table -->
-    <table style="margin-top: 32px;">
+    <table>
       <thead>
         <tr>
-          <th>Description of Services & Venue Hires</th>
+          <th>Description</th>
           <th style="text-align: center; width: 60px;">Qty</th>
-          <th style="text-align: right; width: 110px;">Unit Rate</th>
-          <th style="text-align: right; width: 120px;">Amount</th>
+          <th style="text-align: right; width: 110px;">Price</th>
+          <th style="text-align: right; width: 130px;">Amount</th>
         </tr>
       </thead>
       <tbody>
@@ -729,380 +720,52 @@ const getInvoiceHtml = async (req, res) => {
       </tbody>
     </table>
 
-    <!-- Bottom Calculations section & Remittance Details -->
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 30px;">
-      <div style="flex: 1; font-size: 11.5px; color: #4a5568; line-height: 1.6; padding-right: 32px;">
-        ${inv.notes ? `<div style="font-style: italic; font-family: 'Playfair Display', serif; color: #718096; margin-bottom: 16px;">* Note: ${inv.notes}</div>` : ""}
-        
-        <div style="border: 1px solid #e0c878; padding: 14px 16px; background: #fffdfc; font-size: 11px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
-            <div>
-              <strong style="color: #b89230; text-transform: uppercase; font-family: 'Playfair Display', serif; font-size: 9.5px; display: block; margin-bottom: 8px; letter-spacing: 1px;">Bank Details / Remittance Instructions</strong>
-              ${bankDetails.bank_name ? `<strong>Banker:</strong> ${bankDetails.bank_name}<br>` : ""}
-              ${bankDetails.account_number ? `<strong>Account Number:</strong> ${bankDetails.account_number}<br>` : ""}
-              ${bankDetails.ifsc_code ? `<strong>IFSC Code:</strong> ${bankDetails.ifsc_code}<br>` : ""}
-              ${bankDetails.upi_id ? `<strong>UPI Address:</strong> <span style="font-family: monospace; color: #0F172A; font-weight: 600;">${bankDetails.upi_id}</span>` : ""}
-              ${!bankDetails.bank_name && !bankDetails.upi_id ? `<em style="color: #a0aec0;">Contact venue operators for bank transfer details.</em>` : ""}
-            </div>
-            ${qrCodeUrl ? `
-            <div style="text-align: center; border-left: 1px solid #e0c878; padding-left: 16px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
-              <img src="${qrCodeUrl}" alt="UPI Scan to Pay" style="width: 90px; height: 90px; display: block;" />
-              <span style="font-family: 'Playfair Display', serif; font-size: 9px; font-weight: 700; color: #b89230; margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase;">Scan to Pay</span>
-            </div>
-            ` : ""}
-          </div>
-        </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 32px;">
+      <div style="flex: 1; padding-right: 40px; font-size: 11.5px; color: #5c6f84;">
+        ${inv.notes ? `<div style="border-left: 2px solid #d4af37; padding-left: 14px; font-style: italic;"><strong>Notes:</strong><br>${inv.notes}</div>` : ""}
       </div>
-      
       <div class="totals-elegant">
         <div class="totals-row-el"><span>Subtotal</span><span>${fmt(inv.subtotal)}</span></div>
-        ${inv.discount_amount ? `<div class="totals-row-el" style="color: #c53030;"><span>Adjusted Discount</span><span>- ${fmt(inv.discount_amount)}</span></div>` : ""}
-        
-        ${inv.tax_enabled ? (inv.tax_label && inv.tax_label.toUpperCase() === "GST" ? `
-          <div class="totals-row-el"><span>CGST (${inv.tax_percentage / 2}%)</span><span>${fmt(inv.tax_amount / 2)}</span></div>
-          <div class="totals-row-el"><span>SGST (${inv.tax_percentage / 2}%)</span><span>${fmt(inv.tax_amount / 2)}</span></div>
-        ` : `
-          <div class="totals-row-el"><span>${inv.tax_label || "Tax"} (${inv.tax_percentage}%)</span><span>${fmt(inv.tax_amount)}</span></div>
-        `) : ""}
-        
-        <div class="totals-row-el grand-el"><span>Total Charge</span><span>${fmt(inv.total_amount)}</span></div>
-        ${inv.amount_paid > 0 ? `<div class="totals-row-el bold" style="color: #276749; font-size: 11.5px; padding-top: 6px;"><span>Total Receipts logged</span><span>- ${fmt(inv.amount_paid)}</span></div>` : ""}
-        <div class="totals-row-el grand-el" style="color: #b89230;"><span>Pending Balance</span><span>${fmt(inv.balance_due)}</span></div>
+        <div class="totals-row-el" style="border-top: 1px double #e2e8f0; font-weight: 700;"><span>Total</span><span>${fmt(inv.total_amount)}</span></div>
       </div>
-    </div>
-
-    <!-- Ornate Signature Lines -->
-    <div style="display: flex; justify-content: space-between; margin-top: 60px; font-size: 10px; font-family: 'Playfair Display', serif; text-transform: uppercase; letter-spacing: 1px;">
-      <div style="border-top: 1px solid #d4af37; width: 190px; text-align: center; padding-top: 8px; color: #0F172A;">Authorized Representative</div>
-      <div style="border-top: 1px solid #d4af37; width: 190px; text-align: center; padding-top: 8px; color: #0F172A;">Client / Payer Signature</div>
-    </div>
-
-    <!-- Brand Footer -->
-    <div class="brand-footer" style="margin-top: 50px; padding-top: 16px; border-top: 1px solid #d4af37; display: flex; justify-content: space-between; align-items: center; font-size: 9.5px; color: #b89230; font-family: 'Montserrat', sans-serif; letter-spacing: 0.8px; text-transform: uppercase;">
-      <span>Powered by <strong>Infovex Halls</strong> — India's First dedicated Venue CRM</span>
-      <span>by <strong>Infovex Technologies</strong></span>
     </div>
   </div>
 </body>
 </html>`;
-
-    } else if (template === "minimalist") {
-      // PREMIUM TEMPLATE 3: MINIMALIST / ULTRA-CLEAN MONOCHROME
-      const lineItemsMinimalist = (inv.line_items || [])
-        .map(
-          (item) => `
-          <tr style="border-bottom: 1px solid #f1f5f9;">
-            <td style="padding: 12px 0; color: #111; font-weight: 500;">${item.description || ""}</td>
-            <td style="padding: 12px 0; text-align: center; color: #555;">${item.quantity || 1}</td>
-            <td style="padding: 12px 0; text-align: right; color: #555; font-family: monospace;">${fmt(item.unit_price)}</td>
-            <td style="padding: 12px 0; text-align: right; color: #111; font-weight: 700; font-family: monospace;">${fmt(item.amount)}</td>
-          </tr>`
-        )
-        .join("");
-
-      html = `<!DOCTYPE html>
-<html lang="en">
+  } else {
+    // DEFAULT / CLASSIC
+    html = `<!DOCTYPE html>
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Invoice ${inv.invoice_number}</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background-color: #ffffff; color: #333333; padding: 40px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; font-size: 12px; }
-  .container { max-width: 760px; margin: 0 auto; }
-  .divider-thin { border: none; border-top: 1px solid #000000; margin: 20px 0; }
-  .divider-light { border: none; border-top: 1px solid #e2e8f0; margin: 16px 0; }
-  table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-  th { border-bottom: 1px solid #000000; color: #000000; font-weight: 700; font-size: 11px; text-transform: uppercase; padding: 10px 0; text-align: left; }
-  .totals-min { margin-left: auto; width: 250px; margin-top: 16px; }
-  .totals-row-min { display: flex; justify-content: space-between; padding: 4px 0; }
-  .totals-row-min.bold { font-weight: 700; color: #000000; border-top: 1px solid #000; margin-top: 4px; padding-top: 8px; }
-  .status-unpaid-min { border: 1px solid #e11d48; color: #e11d48; padding: 2px 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
-  .status-paid-min { border: 1px solid #059669; color: #059669; padding: 2px 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
-  .status-partial-min { border: 1px solid #d97706; color: #d97706; padding: 2px 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
-  @media print {
-    @page { size: auto; margin: 15mm; }
-    body { background-color: #ffffff; padding: 0; }
-    .container { max-width: 100%; }
-    .totals-min, .totals-row-min, tr, .divider-thin, .divider-light { page-break-inside: avoid; }
-    table { page-break-inside: auto; }
-    thead { display: table-header-group; }
-  }
+  body { font-family: Arial; padding: 40px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+  th { background: #f8fafc; border-bottom: 2px solid #e5e7eb; padding: 10px; text-align: left; }
+  td { padding: 10px; border-bottom: 1px solid #eee; }
 </style>
 </head>
 <body>
-  <div class="container">
-    
-    <!-- Header layout -->
-    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-      <div>
-        <h1 style="font-size: 20px; font-weight: 700; color: #000000; letter-spacing: -0.5px;">${inv.hall_name || "VENUE"}</h1>
-        <p style="color: #666; font-size: 11px; margin-top: 4px; line-height: 1.5; font-family: monospace;">
-          ${inv.hall_address ? inv.hall_address : ""}<br>
-          ${inv.hall_phone ? `P: ${inv.hall_phone}` : ""} ${inv.hall_email ? `• E: ${inv.hall_email}` : ""}<br>
-          ${inv.hall_gstin ? `GSTIN: ${inv.hall_gstin}` : ""}
-        </p>
-      </div>
-      <div style="text-align: right;">
-        <h2 style="font-size: 20px; font-weight: 300; letter-spacing: 1px; color: #000000; margin-bottom: 6px;">INVOICE</h2>
-        <p style="font-family: monospace; font-size: 12px; font-weight: 700; margin-bottom: 8px;"># ${inv.invoice_number}</p>
-        <span class="status-${inv.status}-min">${inv.status}</span>
-      </div>
-    </div>
-
-    <div class="divider-thin"></div>
-
-    <div style="display: flex; justify-content: space-between; font-size: 11px; line-height: 1.6;">
-      <div>
-        <div style="font-weight: 700; text-transform: uppercase; font-size: 9px; color: #888; margin-bottom: 4px;">Bill To</div>
-        <strong>${inv.customer_name || ""}</strong><br>
-        ${inv.customer_phone ? `Phone: ${inv.customer_phone}<br>` : ""}
-        ${inv.customer_email ? `Email: ${inv.customer_email}<br>` : ""}
-        ${inv.customer_address || ""}
-      </div>
-      <div style="text-align: right;">
-        <div style="font-weight: 700; text-transform: uppercase; font-size: 9px; color: #888; margin-bottom: 4px;">Metadata</div>
-        <strong>Event:</strong> ${inv.event_name || inv.event_type || ""}<br>
-        <strong>Schedules:</strong> ${inv.event_date}<br>
-        <strong>Created:</strong> ${inv.invoice_date}
-      </div>
-    </div>
-
-    <!-- Table -->
-    <table>
-      <thead>
-        <tr>
-          <th style="text-align: left;">Description</th>
-          <th style="text-align: center; width: 60px;">Qty</th>
-          <th style="text-align: right; width: 100px;">Price</th>
-          <th style="text-align: right; width: 110px;">Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${lineItemsMinimalist}
-      </tbody>
-    </table>
-
-    <!-- Calculations & Bank Details -->
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 24px;">
-      <div style="flex: 1; font-size: 11px; color: #333; font-family: monospace; padding-right: 40px; line-height: 1.5;">
-        ${inv.notes ? `NOTE: ${inv.notes}<br><br>` : ""}
-        <div style="border-top: 1px solid #000; padding-top: 12px; font-size: 10.5px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
-            <div>
-              <strong style="color: #000; text-transform: uppercase; display: block; margin-bottom: 6px; font-weight: 700;">PAYMENT METHODS</strong>
-              ${bankDetails.bank_name ? `Bank: ${bankDetails.bank_name}<br>` : ""}
-              ${bankDetails.account_number ? `Account: ${bankDetails.account_number}<br>` : ""}
-              ${bankDetails.ifsc_code ? `IFSC: ${bankDetails.ifsc_code}<br>` : ""}
-              ${bankDetails.upi_id ? `UPI: ${bankDetails.upi_id}` : ""}
-              ${!bankDetails.bank_name && !bankDetails.upi_id ? `Contact venue representative for payment transfer details.` : ""}
-            </div>
-            ${qrCodeUrl ? `
-            <div style="text-align: center; border-left: 1px solid #000; padding-left: 16px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
-              <img src="${qrCodeUrl}" alt="UPI Scan to Pay" style="width: 90px; height: 90px; display: block; filter: grayscale(100%);" />
-              <span style="font-size: 9px; font-weight: 700; color: #000; margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase; font-family: monospace;">SCAN TO PAY</span>
-            </div>
-            ` : ""}
-          </div>
-        </div>
-      </div>
-      
-      <div class="totals-min">
-        <div class="totals-row-min"><span>Subtotal</span><span style="font-family: monospace;">${fmt(inv.subtotal)}</span></div>
-        ${inv.discount_amount ? `<div class="totals-row-min" style="color: #e11d48;"><span>Discount</span><span style="font-family: monospace;">- ${fmt(inv.discount_amount)}</span></div>` : ""}
-        
-        ${inv.tax_enabled ? (inv.tax_label && inv.tax_label.toUpperCase() === "GST" ? `
-          <div class="totals-row-min"><span>CGST (${inv.tax_percentage / 2}%)</span><span style="font-family: monospace;">${fmt(inv.tax_amount / 2)}</span></div>
-          <div class="totals-row-min"><span>SGST (${inv.tax_percentage / 2}%)</span><span style="font-family: monospace;">${fmt(inv.tax_amount / 2)}</span></div>
-        ` : `
-          <div class="totals-row-min"><span>${inv.tax_label || "Tax"} (${inv.tax_percentage}%)</span><span style="font-family: monospace;">${fmt(inv.tax_amount)}</span></div>
-        `) : ""}
-        
-        <div class="totals-row-min bold"><span>Total</span><span style="font-family: monospace;">${fmt(inv.total_amount)}</span></div>
-        ${inv.amount_paid > 0 ? `<div class="totals-row-min" style="font-size: 11px; color: #059669; padding-top: 4px;"><span>Payments Received</span><span style="font-family: monospace;">- ${fmt(inv.amount_paid)}</span></div>` : ""}
-        <div class="totals-row-min bold" style="border-top: 1px dashed #ccc; font-size: 13px;"><span>Balance Due</span><span style="font-family: monospace;">${fmt(inv.balance_due)}</span></div>
-      </div>
-    </div>
-
-    <div class="divider-light" style="margin-top: 60px;"></div>
-
-    <!-- Brand Footer -->
-    <div class="brand-footer" style="display: flex; justify-content: space-between; align-items: center; font-size: 9px; color: #999999; font-family: monospace;">
-      <span>Powered by Infovex Halls — India's First dedicated Venue CRM</span>
-      <span>by Infovex Technologies</span>
-    </div>
-  </div>
-</body>
-</html>`;
-
-    } else {
-      // DEFAULT / CLASSIC TEMPLATE
-      const lineItemsClassic = (inv.line_items || [])
-        .map(
-          (item) => `
-          <tr>
-            <td style="padding: 10px 12px; border-bottom: 1px solid #f0f0f0;">${item.description || ""}</td>
-            <td style="padding: 10px 12px; border-bottom: 1px solid #f0f0f0; text-align:center">${item.quantity || 1}</td>
-            <td style="padding: 10px 12px; border-bottom: 1px solid #f0f0f0; text-align:right">${fmt(item.unit_price)}</td>
-            <td style="padding: 10px 12px; border-bottom: 1px solid #f0f0f0; text-align:right">${fmt(item.amount)}</td>
-          </tr>`
-        )
-        .join("");
-
-      html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Invoice ${inv.invoice_number}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; font-size: 13px; color: #333; padding: 40px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }
-  .hall-name { font-size: 22px; font-weight: 700; color: #0F172A; }
-  .hall-details { font-size: 12px; color: #666; margin-top: 4px; line-height: 1.6; }
-  .invoice-meta { text-align: right; }
-  .invoice-meta h2 { font-size: 28px; color: #0F172A; letter-spacing: 1px; }
-  .invoice-meta p { font-size: 12px; color: #666; margin-top: 4px; }
-  .divider { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
-  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
-  .party-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #888; margin-bottom: 6px; letter-spacing: 0.5px; }
-  .party-name { font-size: 15px; font-weight: 600; color: #1a1a1a; }
-  .party-detail { font-size: 12px; color: #666; line-height: 1.7; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-  thead th { background: #f8fafc; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; color: #475569; border-bottom: 2px solid #e2e8f0; }
-  .totals { margin-left: auto; width: 280px; }
-  .totals table { font-size: 13px; width: 100%; }
-  .totals td { padding: 5px 8px; }
-  .totals .label { color: #666; }
-  .totals .amount { text-align: right; font-weight: 500; }
-  .total-row td { font-size: 15px; font-weight: 700; border-top: 2px solid #0F172A; padding-top: 8px; color: #0F172A; }
-  .balance-row td { color: #7C3AED; font-size: 16px; font-weight: 700; }
-  .paid-row td { color: #16a34a; }
-  .status-badge { display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 600; border: 1px solid transparent; text-transform: uppercase; }
-  .status-paid { background: #dcfce7; color: #16a34a; border-color: #bbf7d0; }
-  .status-unpaid { background: #fee2e2; color: #dc2626; border-color: #fecaca; }
-  .status-partial { background: #fef3c7; color: #d97706; border-color: #fde68a; }
-  .footer { margin-top: 40px; font-size: 12px; color: #888; border-top: 1px solid #e5e7eb; padding-top: 16px; }
-  @media print {
-    @page { size: auto; margin: 15mm; }
-    body { background-color: #ffffff; padding: 0; }
-    .totals, tr, .divider { page-break-inside: avoid; }
-    table { page-break-inside: auto; }
-    thead th { background: #f8fafc !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
-</style>
-</head>
-<body>
-  <div class="header">
-    <div>
-      ${inv.hall_logo_url ? `<img src="${inv.hall_logo_url}" alt="Logo" style="height:52px;margin-bottom:8px;display:block;object-fit:contain;">` : ""}
-      <div class="hall-name">${inv.hall_name || "Venue Panel"}</div>
-      <div class="hall-details">
-        ${inv.hall_address ? inv.hall_address + "<br>" : ""}
-        ${inv.hall_phone ? "Phone: " + inv.hall_phone + "<br>" : ""}
-        ${inv.hall_email ? "Email: " + inv.hall_email + "<br>" : ""}
-        ${inv.hall_gstin ? "GSTIN: " + inv.hall_gstin : ""}
-      </div>
-    </div>
-    <div class="invoice-meta">
-      <h2>INVOICE</h2>
-      <p><strong>${inv.invoice_number}</strong></p>
-      <p>Date: ${inv.invoice_date}</p>
-      ${inv.due_date ? `<p>Due: ${inv.due_date}</p>` : ""}
-      <br>
-      <span class="status-badge status-${inv.status}">${inv.status}</span>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="parties">
-    <div>
-      <div class="party-label">Bill To</div>
-      <div class="party-name">${inv.customer_name || ""}</div>
-      <div class="party-detail">
-        ${inv.customer_phone ? "Phone: " + inv.customer_phone + "<br>" : ""}
-        ${inv.customer_email ? "Email: " + inv.customer_email + "<br>" : ""}
-        ${inv.customer_address || ""}
-      </div>
-    </div>
-    <div>
-      <div class="party-label">Event Details</div>
-      <div class="party-name">${inv.event_name || inv.event_type || ""}</div>
-      <div class="party-detail">
-        ${inv.event_date ? "Date: " + inv.event_date + (inv.event_end_date && inv.event_end_date !== inv.event_date ? " to " + inv.event_end_date : "") + "<br>" : ""}
-        ${inv.event_type ? "Type: " + inv.event_type : ""}
-      </div>
-    </div>
-  </div>
-
+  <h1>Invoice: ${inv.invoice_number}</h1>
+  <p>${inv.hall_name || ""}</p>
   <table>
-    <thead>
-      <tr>
-        <th>Description</th>
-        <th style="text-align:center; width: 60px;">Qty</th>
-        <th style="text-align:right; width: 110px;">Unit Price</th>
-        <th style="text-align:right; width: 120px;">Amount</th>
-      </tr>
-    </thead>
+    <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Amount</th></tr></thead>
     <tbody>
-      ${lineItemsClassic}
+      ${(inv.line_items || []).map(i => `<tr><td>${i.description}</td><td>${i.quantity}</td><td>${fmt(i.unit_price)}</td><td>${fmt(i.amount)}</td></tr>`).join("")}
     </tbody>
   </table>
-
-  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-top: 24px;">
-    <div style="flex: 1; font-size: 11px; color: #555; line-height: 1.6; padding-right: 32px;">
-      ${inv.notes ? `<div style="background: #f8fafc; border-left: 3px solid #0F172A; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px; color: #333;"><strong>Notes:</strong><br>${inv.notes}</div>` : ""}
-      
-      <div style="border: 1px solid #e5e7eb; border-radius: 4px; padding: 10px 14px; background: #fafafa;">
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
-          <div>
-            <strong style="color: #0F172A; text-transform: uppercase; font-size: 9.5px; display: block; margin-bottom: 6px;">Bank Details / Remittance</strong>
-            ${bankDetails.bank_name ? `<strong>Bank Name:</strong> ${bankDetails.bank_name}<br>` : ""}
-            ${bankDetails.account_number ? `<strong>Account Number:</strong> ${bankDetails.account_number}<br>` : ""}
-            ${bankDetails.ifsc_code ? `<strong>IFSC Code:</strong> ${bankDetails.ifsc_code}<br>` : ""}
-            ${bankDetails.upi_id ? `<strong>UPI ID:</strong> <span style="font-family: monospace;">${bankDetails.upi_id}</span>` : ""}
-            ${!bankDetails.bank_name && !bankDetails.upi_id ? `<em>Contact venue operators for bank payment instructions.</em>` : ""}
-          </div>
-          ${qrCodeUrl ? `
-          <div style="text-align: center; border-left: 1px solid #e5e7eb; padding-left: 16px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center;">
-            <img src="${qrCodeUrl}" alt="UPI Scan to Pay" style="width: 90px; height: 90px; display: block;" />
-            <span style="font-size: 9px; font-weight: 700; color: #0F172A; margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase;">Scan to Pay</span>
-          </div>
-          ` : ""}
-        </div>
-      </div>
-    </div>
-    
-    <div class="totals">
-      <table>
-        <tr><td class="label">Subtotal</td><td class="amount">${fmt(inv.subtotal)}</td></tr>
-        ${inv.discount_amount ? `<tr><td class="label">Discount</td><td class="amount">- ${fmt(inv.discount_amount)}</td></tr>` : ""}
-        
-        ${inv.tax_enabled ? (inv.tax_label && inv.tax_label.toUpperCase() === "GST" ? `
-          <tr><td class="label">CGST (${inv.tax_percentage / 2}%)</td><td class="amount">${fmt(inv.tax_amount / 2)}</td></tr>
-          <tr><td class="label">SGST (${inv.tax_percentage / 2}%)</td><td class="amount">${fmt(inv.tax_amount / 2)}</td></tr>
-        ` : `
-          <tr><td class="label">${inv.tax_label || "Tax"} (${inv.tax_percentage}%)</td><td class="amount">${fmt(inv.tax_amount)}</td></tr>
-        `) : ""}
-        
-        <tr class="total-row"><td>Total</td><td class="amount">${fmt(inv.total_amount)}</td></tr>
-        ${inv.amount_paid > 0 ? `<tr class="paid-row"><td class="label">Amount Paid</td><td class="amount">- ${fmt(inv.amount_paid)}</td></tr>` : ""}
-        <tr class="balance-row"><td>Balance Due</td><td class="amount">${fmt(inv.balance_due)}</td></tr>
-      </table>
-    </div>
-  </div>
-
-  <!-- Brand Footer -->
-  <div class="brand-footer" style="margin-top: 50px; padding-top: 16px; border-top: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #94a3b8; font-weight: 500;">
-    <span>Powered by <strong style="color: #64748b;">Infovex Halls</strong> — India's First dedicated Venue CRM</span>
-    <span>by <strong style="color: #64748b;">Infovex Technologies</strong></span>
-  </div>
+  <div style="margin-top:24px;"><strong>Total: ${fmt(inv.total_amount)}</strong></div>
 </body>
 </html>`;
-    }
+  }
+  return html;
+};
 
+const getInvoiceHtml = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const hall_id = req.user.hall_id;
+    const html = await buildInvoiceHtmlContent(id, hall_id);
     res.setHeader("Content-Type", "text/html");
     res.send(html);
   } catch (err) {
@@ -1111,55 +774,65 @@ const getInvoiceHtml = async (req, res) => {
   }
 };
 
+const getInvoicePdf = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const hall_id = req.user.hall_id;
+    const html = await buildInvoiceHtmlContent(id, hall_id);
+    const pdfBuffer = await renderHtmlToPdf(html);
+    res.setHeader("Content-Type", "application/pdf");
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error("getInvoicePdf error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 /* ============================================================
    CREATE PAYMENT RECEIPT
    Lightweight receipt for a single payment
    ============================================================ */
-const createReceipt = async (req, res) => {
-  try {
-    const hall_id = req.user.hall_id;
-    const { payment_id } = req.params;
+const buildReceiptHtmlContent = async (payment_id, hall_id) => {
+  const { data: payment } = await supabaseAdmin
+    .from("payments")
+    .select(`
+      *,
+      bookings (
+        id, event_name, event_type, start_date, end_date, total_amount,
+        customers ( customer_name, phone, email, address )
+      )
+    `)
+    .eq("id", payment_id)
+    .eq("hall_id", hall_id)
+    .single();
 
-    const { data: payment } = await supabaseAdmin
-      .from("payments")
-      .select(`
-        *,
-        bookings (
-          id, event_name, event_type, start_date, end_date, total_amount,
-          customers ( customer_name, phone, email, address )
-        )
-      `)
-      .eq("id", payment_id)
-      .eq("hall_id", hall_id)
-      .single();
+  if (!payment) throw new Error("Payment not found");
 
-    if (!payment) return res.status(404).json({ message: "Payment not found" });
+  const settings = await getSettingsForHall(hall_id);
+  const { data: hallProfile } = await supabaseAdmin
+    .from("hall_profiles")
+    .select("hall_name, phone, email, address, city, logo_url")
+    .eq("hall_id", hall_id)
+    .maybeSingle();
+  const { data: hall } = await supabaseAdmin
+    .from("marriage_halls")
+    .select("hall_name, phone, email, address")
+    .eq("id", hall_id)
+    .single();
 
-    const settings = await getSettingsForHall(hall_id);
-    const { data: hallProfile } = await supabaseAdmin
-      .from("hall_profiles")
-      .select("hall_name, phone, email, address, city, logo_url")
-      .eq("hall_id", hall_id)
-      .maybeSingle();
-    const { data: hall } = await supabaseAdmin
-      .from("marriage_halls")
-      .select("hall_name, phone, email, address")
-      .eq("id", hall_id)
-      .single();
+  // Generate receipt number
+  const year = new Date().getFullYear();
+  const { count } = await supabaseAdmin
+    .from("invoices")
+    .select("id", { count: "exact", head: true })
+    .eq("hall_id", hall_id)
+    .ilike("invoice_number", `${settings.receipt_prefix}-%`);
 
-    // Generate receipt number
-    const year = new Date().getFullYear();
-    const { count } = await supabaseAdmin
-      .from("invoices")
-      .select("id", { count: "exact", head: true })
-      .eq("hall_id", hall_id)
-      .ilike("invoice_number", `${settings.receipt_prefix}-%`);
+  const receiptNumber = `${settings.receipt_prefix}-${year}-${String((count || 0) + 1).padStart(4, "0")}`;
+  const symbol = settings.currency_symbol || "₹";
+  const fmt = (n) => `${symbol}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
 
-    const receiptNumber = `${settings.receipt_prefix}-${year}-${String((count || 0) + 1).padStart(4, "0")}`;
-    const symbol = settings.currency_symbol || "₹";
-    const fmt = (n) => `${symbol}${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
-
-    const html = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1215,10 +888,32 @@ const createReceipt = async (req, res) => {
 </body>
 </html>`;
 
+  return html;
+};
+
+const createReceipt = async (req, res) => {
+  try {
+    const { payment_id } = req.params;
+    const hall_id = req.user.hall_id;
+    const html = await buildReceiptHtmlContent(payment_id, hall_id);
     res.setHeader("Content-Type", "text/html");
     res.send(html);
   } catch (err) {
     console.error("createReceipt error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+const getReceiptPdf = async (req, res) => {
+  try {
+    const { payment_id } = req.params;
+    const hall_id = req.user.hall_id;
+    const html = await buildReceiptHtmlContent(payment_id, hall_id);
+    const pdfBuffer = await renderHtmlToPdf(html);
+    res.setHeader("Content-Type", "application/pdf");
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error("getReceiptPdf error:", err);
     res.status(500).json({ message: "Server error" });
   }
 };
@@ -1313,7 +1008,9 @@ module.exports = {
   getInvoices,
   updateInvoiceStatus,
   getInvoiceHtml,
+  getInvoicePdf,
   createReceipt,
+  getReceiptPdf,
   deleteInvoice,
   exportGstr1Report,
 };
