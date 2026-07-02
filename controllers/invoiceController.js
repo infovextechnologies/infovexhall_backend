@@ -287,9 +287,14 @@ const createInvoice = async (req, res) => {
       }
     }
 
-    const subtotal = booking.subtotal !== null && booking.subtotal !== undefined
-      ? Number(booking.subtotal)
-      : Number(booking.total_amount || 0);
+    let subtotal = 0;
+    if (line_items && Array.isArray(line_items) && line_items.length > 0) {
+      subtotal = line_items.reduce((sum, item) => sum + (Number(item.quantity || 1) * Number(item.unit_price || 0)), 0);
+    } else {
+      subtotal = booking.subtotal !== null && booking.subtotal !== undefined
+        ? Number(booking.subtotal)
+        : Number(booking.total_amount || 0);
+    }
 
     const discount = discount_amount !== undefined ? Number(discount_amount) : Number(booking.discount_amount || 0);
     const taxable_amount = subtotal - discount;
