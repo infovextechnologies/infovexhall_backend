@@ -27,16 +27,7 @@ const renderHtmlToPdf = async (html, metadata = {}) => {
     const browser = await getBrowserInstance();
     page = await browser.newPage();
     
-    // Speed up rendering by blocking tracking/analytics/external scripts
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      const type = req.resourceType();
-      if (type === "stylesheet" || type === "image" || type === "font") {
-        req.continue();
-      } else {
-        req.abort(); // Block scripts/analytics/XHR
-      }
-    });
+
 
     await page.setContent(html, { waitUntil: "networkidle0" });
 
@@ -1053,6 +1044,13 @@ const getInvoicePdf = async (req, res) => {
 
     // Try to fetch from storage cache
     let pdfBuffer = await getCachedPdf(cachePath);
+
+    // Self-healing check: if cached PDF is corrupt or too small (e.g. under 10KB), evict and regenerate
+    if (pdfBuffer && pdfBuffer.length < 10000) {
+      console.warn(`Cached PDF at ${cachePath} is too small (${pdfBuffer.length} bytes), evicting and regenerating.`);
+      await evictCachedPdf(cachePath);
+      pdfBuffer = null;
+    }
 
     // If cache miss, generate and upload
     if (!pdfBuffer) {
