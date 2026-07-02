@@ -545,7 +545,7 @@ const updateInvoiceStatus = async (req, res) => {
    GET INVOICE HTML (for PDF generation or print)
    Returns a clean HTML string the frontend can print or convert
    ============================================================ */
-const buildInvoiceHtmlContent = async (id, hall_id) => {
+const buildInvoiceHtmlContent = async (id, hall_id, forcedTemplate = null) => {
   const { data: inv, error } = await supabaseAdmin
     .from("invoices")
     .select("*")
@@ -594,8 +594,11 @@ const buildInvoiceHtmlContent = async (id, hall_id) => {
                     sub?.packages?.features?.invoice_templates ||
                     false;
 
-  let template = (settingsRes?.data?.invoice_template || "classic").toLowerCase();
-  if (!isPremium) {
+  let template = (forcedTemplate || settingsRes?.data?.invoice_template || "classic").toLowerCase();
+  if (forcedTemplate) {
+    // If the owner explicitly requests a template from the builder dropdown, allow it
+    template = forcedTemplate.toLowerCase();
+  } else if (!isPremium) {
     template = "classic"; // Restrict basic tier users to classic/default template
   }
 
@@ -1009,7 +1012,8 @@ const getInvoiceHtml = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
-    const html = await buildInvoiceHtmlContent(id, hall_id);
+    const forcedTemplate = req.query.template || null;
+    const html = await buildInvoiceHtmlContent(id, hall_id, forcedTemplate);
     res.setHeader("Content-Type", "text/html");
     res.send(html);
   } catch (err) {
@@ -1022,12 +1026,35 @@ const getInvoicePdf = async (req, res) => {
   try {
     const { id } = req.params;
     const hall_id = req.user.hall_id;
+    const forcedTemplate = req.query.template || null;
+
+    // If forcedTemplate is specified, bypass storage cache to render the template on the fly
+    if (forcedTemplate) {
+      const html = await buildInvoiceHtmlContent(id, hall_id, forcedTemplate);
+      
+      const { data: inv } = await supabaseAdmin
+        .from("invoices")
+        .select("invoice_number")
+        .eq("id", id)
+        .single();
+      
+      const metadata = {
+        title: inv ? `Invoice ${inv.invoice_number}` : `Invoice ${id}`,
+        author: "Infovex Halls",
+        subject: "Invoice Document"
+      };
+
+      const pdfBuffer = await renderHtmlToPdf(html, metadata);
+      res.setHeader("Content-Type", "application/pdf");
+      return res.send(pdfBuffer);
+    }
+
     const cachePath = `invoices/${id}.pdf`;
 
-    // 1. Try to fetch from storage cache
+    // Try to fetch from storage cache
     let pdfBuffer = await getCachedPdf(cachePath);
 
-    // 2. If cache miss, generate and upload
+    // If cache miss, generate and upload
     if (!pdfBuffer) {
       const html = await buildInvoiceHtmlContent(id, hall_id);
       
