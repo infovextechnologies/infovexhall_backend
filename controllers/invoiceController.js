@@ -393,7 +393,7 @@ const getInvoiceDto = async (req, res) => {
 
     const { data: payments } = await supabaseAdmin
       .from("payments")
-      .select("id, amount, payment_method, payment_date, reference_number")
+      .select("id, amount, payment_method, payment_date, notes")
       .eq("booking_id", invoice.booking_id)
       .eq("hall_id", hall_id)
       .order("payment_date", { ascending: true });
@@ -442,13 +442,20 @@ const getInvoiceDto = async (req, res) => {
         balanceDue: Number(invoice.balance_due || 0),
         currencySymbol: invoice.currency_symbol || settings.currency_symbol || "₹",
       },
-      payments: (payments || []).map(p => ({
-        id: p.id,
-        amount: Number(p.amount || 0),
-        paymentMethod: p.payment_method || "cash",
-        paymentDate: p.payment_date,
-        transactionId: p.reference_number || null,
-      })),
+      payments: (payments || []).map(p => {
+        let transactionId = null;
+        if (p.notes) {
+          const match = p.notes.match(/(?:Ref|UTR):\s*([A-Za-z0-9_-]+)/i) || p.notes.match(/\(Ref:\s*([A-Za-z0-9_-]+)\)/i);
+          if (match) transactionId = match[1];
+        }
+        return {
+          id: p.id,
+          amount: Number(p.amount || 0),
+          paymentMethod: p.payment_method || "cash",
+          paymentDate: p.payment_date,
+          transactionId: transactionId,
+        };
+      }),
       invoiceTemplate: settings.invoice_template || "classic",
       receiptTemplate: settings.booking_settings?.receiptTemplate || settings.invoice_template || "classic",
     };
@@ -559,7 +566,13 @@ const getReceiptDto = async (req, res) => {
           amount: Number(payment.amount || 0),
           paymentMethod: payment.payment_method || "cash",
           paymentDate: payment.payment_date,
-          transactionId: payment.reference_number || null,
+          transactionId: (() => {
+            if (payment.notes) {
+              const match = payment.notes.match(/(?:Ref|UTR):\s*([A-Za-z0-9_-]+)/i) || payment.notes.match(/\(Ref:\s*([A-Za-z0-9_-]+)\)/i);
+              if (match) return match[1];
+            }
+            return null;
+          })(),
         }
       ],
       invoiceTemplate: settings.invoice_template || "classic",
