@@ -9,7 +9,7 @@ const { syncInvoiceAndEvictCache } = require("./invoiceController");
 const createPayment = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-    const { booking_id, amount, payment_method, payment_date, notes } = req.body;
+    const { booking_id, amount, payment_method, payment_date, notes, reference_number, referenceNumber } = req.body;
 
     if (!booking_id || !amount) {
       return res.status(400).json({ message: "booking_id and amount are required" });
@@ -50,6 +50,7 @@ const createPayment = async (req, res) => {
         amount,
         payment_method: payment_method || "cash",
         payment_date: payment_date || getLocalDate(),
+        reference_number: reference_number || referenceNumber || null,
         notes,
       }])
       .select()
@@ -371,7 +372,7 @@ const updatePayment = async (req, res) => {
     if (actualMethod !== undefined) updates.payment_method = actualMethod;
     if (actualDate !== undefined) updates.payment_date = actualDate;
     if (notes !== undefined) updates.notes = notes;
-    if (actualRef !== undefined) updates.transaction_ref_no = actualRef;
+    if (actualRef !== undefined) updates.reference_number = actualRef;
 
     const { data: updated, error: updateErr } = await supabaseAdmin
       .from("payments")
