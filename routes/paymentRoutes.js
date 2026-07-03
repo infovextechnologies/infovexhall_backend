@@ -9,6 +9,7 @@ const {
   getPaymentsByBooking,
   deletePayment,
   getPaymentStats,
+  updatePayment,
 } = require("../controllers/paymentController");
 
 const { validatePayment } = require("../middleware/validationMiddleware");
@@ -20,6 +21,7 @@ router.get("/stats", ...hasPermission("view_payments"), getPaymentStats);
 router.get("/", ...hasPermission("view_payments"), getPayments);
 router.get("/booking/:booking_id", ...hasPermission("view_payments"), getPaymentsByBooking);
 router.post("/", ...hasPermission("create_payments"), validatePayment, createPayment);
+router.patch("/:id", ...hasPermission("create_payments"), validatePayment, updatePayment);
 router.delete("/:id", ...hasPermission("create_payments"), deletePayment);
 
 module.exports = router;
