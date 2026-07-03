@@ -70,6 +70,15 @@ const mapSettingsBodyToDb = (body) => {
   if (body.bookingSettings !== undefined) fields.booking_settings = body.bookingSettings;
   else if (body.booking_settings !== undefined) fields.booking_settings = body.booking_settings;
 
+  if (body.receiptTemplate !== undefined || body.receipt_template !== undefined) {
+    const val = body.receiptTemplate !== undefined ? body.receiptTemplate : body.receipt_template;
+    if (!fields.booking_settings) fields.booking_settings = {};
+    if (typeof fields.booking_settings === "string") {
+      try { fields.booking_settings = JSON.parse(fields.booking_settings); } catch (e) { fields.booking_settings = {}; }
+    }
+    fields.booking_settings = { ...fields.booking_settings, receiptTemplate: val };
+  }
+
   // Sync back notification flags if present
   if (fields.notifications) {
     fields.email_notifications = fields.notifications.emailEnabled !== undefined ? fields.notifications.emailEnabled : true;
@@ -129,6 +138,7 @@ const formatDbSettingsToFrontend = (data) => {
       workingDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
     },
     invoiceTemplate: data.invoice_template || "classic",
+    receiptTemplate: data.booking_settings?.receiptTemplate || data.invoice_template || "classic",
     updatedAt: data.updated_at,
   };
 };

@@ -11,10 +11,8 @@ const {
   getInvoiceByBooking,
   getInvoices,
   updateInvoiceStatus,
-  getInvoiceHtml,
-  getInvoicePdf,
-  createReceipt,
-  getReceiptPdf,
+  getInvoiceDto,
+  getReceiptDto,
   deleteInvoice,
   exportGstr1Report,
 } = require("../controllers/invoiceController");
@@ -37,18 +35,8 @@ router.get("/:id", ...hasPermission("view_payments"), getInvoiceById);
 router.patch("/:id/sync", ...hasPermission("create_payments"), updateInvoiceStatus);
 router.delete("/:id", ...hasPermission("delete_bookings"), deleteInvoice);
 
-// ---- HTML invoice — returns printable HTML page ----
-// No JSON header — returns text/html directly for iframe or print window
-router.get("/:id/html", ...hasPermission("view_payments"), getInvoiceHtml);
-
-// ---- PDF invoice — returns compiled high-fidelity vector PDF ----
-router.get("/:id/pdf", ...hasPermission("view_payments"), getInvoicePdf);
-
-// ---- Payment receipt ----
-// Returns printable HTML receipt for a single payment
-router.get("/receipt/:payment_id", ...hasPermission("view_payments"), createReceipt);
-
-// ---- PDF receipt — returns compiled vector PDF receipt ----
-router.get("/receipt/:payment_id/pdf", ...hasPermission("view_payments"), getReceiptPdf);
+// ---- Document DTO Endpoints ----
+router.get("/:id/dto", ...hasPermission("view_payments"), getInvoiceDto);
+router.get("/receipt/:payment_id/dto", ...hasPermission("view_payments"), getReceiptDto);
 
 module.exports = router;
