@@ -670,6 +670,49 @@ const exportGstr1Report = async (req, res) => {
   }
 };
 
+/* ============================================================
+   CACHE EVICTION & SYNC HELPERS
+   ============================================================ */
+const evictCachedPdf = async (path) => {
+  // Since PDF storage caching is disabled, this is a safe no-op.
+  return;
+};
+
+const syncInvoiceAndEvictCache = async (booking_id, hall_id) => {
+  try {
+    // 1. Fetch the invoice
+    const { data: invoice } = await supabaseAdmin
+      .from("invoices")
+      .select("id, total_amount")
+      .eq("booking_id", booking_id)
+      .eq("hall_id", hall_id)
+      .maybeSingle();
+
+    if (!invoice) return;
+
+    // 2. Fetch all payments for this booking
+    const { data: payments } = await supabaseAdmin
+      .from("payments")
+      .select("amount")
+      .eq("booking_id", booking_id);
+
+    const amount_paid = (payments || []).reduce((s, p) => s + (p.amount || 0), 0);
+    const balance_due = Math.max(0, (invoice.total_amount || 0) - amount_paid);
+    const status = balance_due <= 0 ? "paid" : amount_paid > 0 ? "partial" : "unpaid";
+
+    // 3. Update the invoice status and totals in the database
+    await supabaseAdmin
+      .from("invoices")
+      .update({ amount_paid, balance_due, status })
+      .eq("id", invoice.id);
+
+    // 4. Safe call to cache evicter
+    await evictCachedPdf(`invoices/${invoice.id}.pdf`);
+  } catch (err) {
+    console.error("syncInvoiceAndEvictCache error:", err);
+  }
+};
+
 module.exports = {
   createInvoice,
   getInvoiceById,
@@ -680,4 +723,6 @@ module.exports = {
   getReceiptDto,
   deleteInvoice,
   exportGstr1Report,
+  syncInvoiceAndEvictCache,
+  evictCachedPdf,
 };
