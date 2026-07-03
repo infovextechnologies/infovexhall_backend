@@ -123,7 +123,41 @@ const validatePayment = (req, res, next) => {
   }
 
   if (payment_method) {
-    const allowedMethods = ["cash", "bank_transfer", "upi", "card", "cheque"];
+    const allowedMethods = ["cash", "bank_transfer", "upi", "card", "cheque", "other"];
+    if (!allowedMethods.includes(payment_method)) {
+      errors.push(`payment_method must be one of: ${allowedMethods.join(", ")}`);
+    }
+  }
+
+  if (payment_date) {
+    if (typeof payment_date !== "string" || !DATE_REGEX.test(payment_date) || isNaN(Date.parse(payment_date))) {
+      errors.push("payment_date must be a valid date string in YYYY-MM-DD format");
+    }
+  }
+
+  if (errors.length > 0) {
+    return sendErrors(res, errors);
+  }
+
+  next();
+};
+
+/**
+ * Validate Payment update
+ */
+const validatePaymentUpdate = (req, res, next) => {
+  const errors = [];
+  const { amount, payment_method, payment_date } = req.body;
+
+  if (amount !== undefined) {
+    const val = Number(amount);
+    if (isNaN(val) || val <= 0) {
+      errors.push("amount must be a positive number greater than zero");
+    }
+  }
+
+  if (payment_method) {
+    const allowedMethods = ["cash", "bank_transfer", "upi", "card", "cheque", "other"];
     if (!allowedMethods.includes(payment_method)) {
       errors.push(`payment_method must be one of: ${allowedMethods.join(", ")}`);
     }
@@ -210,5 +244,6 @@ const validateEnquiry = (req, res, next) => {
 module.exports = {
   validateBooking,
   validatePayment,
+  validatePaymentUpdate,
   validateEnquiry,
 };
