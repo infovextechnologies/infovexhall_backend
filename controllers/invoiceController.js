@@ -496,6 +496,16 @@ const getReceiptDto = async (req, res) => {
     const year = new Date(payment.payment_date || new Date()).getFullYear();
     const receiptNumber = `${settings.receipt_prefix || "RCP"}-${year}-${payment.id.slice(0, 6).toUpperCase()}`;
 
+    // Fetch all payments for this booking to calculate cumulative amounts
+    const { data: bookingPayments } = await supabaseAdmin
+      .from("payments")
+      .select("amount")
+      .eq("booking_id", payment.booking_id)
+      .eq("hall_id", hall_id);
+
+    const totalPaid = (bookingPayments || []).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const balanceDue = Math.max(0, Number(payment.bookings?.total_amount || 0) - totalPaid);
+
     const dto = {
       documentType: "receipt",
       documentNumber: receiptNumber,
@@ -538,8 +548,10 @@ const getReceiptDto = async (req, res) => {
         taxAmount: 0,
         totalAmount: Number(payment.amount || 0),
         amountPaid: Number(payment.amount || 0),
-        balanceDue: 0,
+        balanceDue: balanceDue,
         currencySymbol: settings.currency_symbol || "₹",
+        bookingTotal: Number(payment.bookings?.total_amount || 0),
+        bookingTotalPaid: totalPaid,
       },
       payments: [
         {
