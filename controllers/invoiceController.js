@@ -212,14 +212,62 @@ const createInvoice = async (req, res) => {
 const getInvoices = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-    const { data, error } = await supabaseAdmin
+    const { status, from_date, to_date, page = 1, limit = 20 } = req.query;
+
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+    const offset = (pageNum - 1) * limitNum;
+
+    // 1. Build Query for Invoices
+    let query = supabaseAdmin
       .from("invoices")
-      .select("*")
-      .eq("hall_id", hall_id)
-      .order("created_at", { ascending: false });
+      .select("*", { count: "exact" })
+      .eq("hall_id", hall_id);
+
+    if (status && status !== 'all') {
+      query = query.eq("status", status);
+    }
+    if (from_date) {
+      query = query.gte("event_date", from_date);
+    }
+    if (to_date) {
+      query = query.lte("event_date", to_date);
+    }
+
+    const { data: invoices, count, error } = await query
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limitNum - 1);
 
     if (error) return res.status(500).json({ message: error.message });
-    res.json(data || []);
+
+    // 2. Fetch all invoices for this hall to compute the total summary statistics (non-paginated)
+    const { data: allInvoices, error: summaryError } = await supabaseAdmin
+      .from("invoices")
+      .select("total_amount, amount_paid, balance_due")
+      .eq("hall_id", hall_id);
+
+    if (summaryError) return res.status(500).json({ message: summaryError.message });
+
+    const total_invoiced = (allInvoices || []).reduce((sum, inv) => sum + (parseFloat(inv.total_amount) || 0), 0);
+    const total_paid = (allInvoices || []).reduce((sum, inv) => sum + (parseFloat(inv.amount_paid) || 0), 0);
+    const total_outstanding = (allInvoices || []).reduce((sum, inv) => sum + (parseFloat(inv.balance_due) || 0), 0);
+    const totalCount = count || 0;
+
+    res.json({
+      data: invoices || [],
+      summary: {
+        total_invoiced,
+        total_paid,
+        total_outstanding,
+        count: allInvoices ? allInvoices.length : 0
+      },
+      meta: {
+        total: totalCount,
+        page: pageNum,
+        limit: limitNum,
+        total_pages: Math.ceil(totalCount / limitNum) || 1
+      }
+    });
   } catch (err) {
     console.error("getInvoices error:", err);
     res.status(500).json({ message: "Server error" });
@@ -425,7 +473,7 @@ const getReceiptDto = async (req, res) => {
       .select(`
         *,
         bookings (
-          id, event_name, event_type, start_date, end_date, total_amount, subtotal, discount_amount, tax_enabled, tax_percentage, tax_amount, tax_label,
+          id, event_name, event_type, start_date, end_date, total_amount, subtotal, discount_amount, tax_enabled, tax_percentage, tax_amount,
           customers ( customer_name, phone, email, address )
         )
       `)
