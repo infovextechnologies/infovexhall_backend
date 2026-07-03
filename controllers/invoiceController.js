@@ -393,7 +393,7 @@ const getInvoiceDto = async (req, res) => {
 
     const { data: payments } = await supabaseAdmin
       .from("payments")
-      .select("id, amount, payment_method, payment_date, transaction_ref_no")
+      .select("id, amount, payment_method, payment_date, reference_number")
       .eq("booking_id", invoice.booking_id)
       .eq("hall_id", hall_id)
       .order("payment_date", { ascending: true });
@@ -447,7 +447,7 @@ const getInvoiceDto = async (req, res) => {
         amount: Number(p.amount || 0),
         paymentMethod: p.payment_method || "cash",
         paymentDate: p.payment_date,
-        transactionId: p.transaction_ref_no || null,
+        transactionId: p.reference_number || null,
       })),
       invoiceTemplate: settings.invoice_template || "classic",
       receiptTemplate: settings.booking_settings?.receiptTemplate || settings.invoice_template || "classic",
@@ -559,7 +559,7 @@ const getReceiptDto = async (req, res) => {
           amount: Number(payment.amount || 0),
           paymentMethod: payment.payment_method || "cash",
           paymentDate: payment.payment_date,
-          transactionId: payment.transaction_ref_no || null,
+          transactionId: payment.reference_number || null,
         }
       ],
       invoiceTemplate: settings.invoice_template || "classic",
