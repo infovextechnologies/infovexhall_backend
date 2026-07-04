@@ -7,7 +7,9 @@ const { supabaseAdmin } = require("../config/supabase");
 const getEvents = async (req, res) => {
   try {
     const hall_id = req.user.hall_id;
-    const { year, month, from_date, to_date } = req.query;
+    const { year, month, from_date, to_date, start, end } = req.query;
+    const finalFromDate = from_date || start;
+    const finalToDate = to_date || end;
 
     let query = supabaseAdmin
       .from("events")
@@ -28,10 +30,10 @@ const getEvents = async (req, res) => {
       query = query
         .gte("event_date", `${year}-${paddedMonth}-01`)
         .lte("event_date", `${year}-${paddedMonth}-${daysInMonth}`);
-    } else if (from_date && to_date) {
-      query = query.gte("event_date", from_date).lte("event_date", to_date);
-    } else if (from_date) {
-      query = query.gte("event_date", from_date);
+    } else if (finalFromDate && finalToDate) {
+      query = query.gte("event_date", finalFromDate).lte("event_date", finalToDate);
+    } else if (finalFromDate) {
+      query = query.gte("event_date", finalFromDate);
     }
 
     const { data, error } = await query;
