@@ -899,10 +899,10 @@ const getAdminSettings = async (req, res) => {
       return res.json({
         companyName: "Infovex Technologies Private Limited",
         gstin: "33AAFCI8876F1Z8",
-        supportPhone: "+91 91801 02030",
-        supportEmail: "support@infovex.com",
+        supportPhone: "+91 8681831689",
+        supportEmail: "contact@infovextech.com",
         defaultTrialDays: 14,
-        invoicePrefix: "INF-HOD-",
+        invoicePrefix: "INF-HALLS-",
         nextInvoiceNumber: 1,
         subscriptionQrEnabled: true,
         subscriptionQrUpiId: "billing@infovex.com",
@@ -916,6 +916,7 @@ const getAdminSettings = async (req, res) => {
           subscriptionSuspended:
             "Dear Admin,\n\nSubscription for {{hall_name}} has been suspended.",
         },
+        testimonials: [],
       });
     }
 
@@ -933,6 +934,7 @@ const getAdminSettings = async (req, res) => {
       emailTemplates: data.email_templates || {},
       founderSlotsClaimed: data.founder_slots_claimed !== undefined ? data.founder_slots_claimed : 14,
       founderSlotsTotal: data.founder_slots_total !== undefined ? data.founder_slots_total : 20,
+      testimonials: data.testimonials || [],
     });
   } catch (err) {
     console.error("getAdminSettings error:", err);
@@ -956,6 +958,7 @@ const updateAdminSettings = async (req, res) => {
       emailTemplates,
       founderSlotsClaimed,
       founderSlotsTotal,
+      testimonials,
     } = req.body;
 
     // Fetch existing settings row to get its ID if not provided, ensuring single-row state
@@ -980,6 +983,7 @@ const updateAdminSettings = async (req, res) => {
       .maybeSingle();
 
     const hasQrFields = testData && ('subscription_qr_enabled' in testData);
+    const hasTestimonials = testData && ('testimonials' in testData);
 
     const payload = {
       company_name: companyName,
@@ -998,6 +1002,10 @@ const updateAdminSettings = async (req, res) => {
     if (hasQrFields) {
       payload.subscription_qr_enabled = subscriptionQrEnabled !== undefined ? subscriptionQrEnabled : true;
       payload.subscription_qr_upi_id = subscriptionQrUpiId || "billing@infovex.com";
+    }
+
+    if (hasTestimonials) {
+      payload.testimonials = testimonials || [];
     }
 
     if (id) payload.id = id;
@@ -2380,7 +2388,7 @@ const getPublicFounderSlots = async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin
       .from("admin_settings")
-      .select("founder_slots_claimed, founder_slots_total")
+      .select("founder_slots_claimed, founder_slots_total, testimonials, support_phone, support_email, company_name")
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -2390,6 +2398,10 @@ const getPublicFounderSlots = async (req, res) => {
     res.json({
       slotsClaimed: data?.founder_slots_claimed ?? 14,
       totalSlots: data?.founder_slots_total ?? 20,
+      testimonials: data?.testimonials ?? [],
+      supportPhone: data?.support_phone ?? "+91 8681831689",
+      supportEmail: data?.support_email ?? "contact@infovextech.com",
+      companyName: data?.company_name ?? "Infovex Technologies",
     });
   } catch (err) {
     console.error("getPublicFounderSlots error:", err);
