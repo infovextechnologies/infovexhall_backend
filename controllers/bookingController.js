@@ -233,6 +233,7 @@ const createBooking = async (req, res) => {
       start_time: extractTime(finalStartDate, "09:00:00"),
       end_time: extractTime(finalEndDate, "21:00:00"),
       all_day: start_date.length <= 10,
+      type: "booking",
     }]);
 
     // ---- If advance paid, record payment ----
@@ -531,7 +532,7 @@ const updateBooking = async (req, res) => {
 
     // Sync calendar event if dates changed
     if (start_date || end_date || event_name) {
-      const calendarUpdate = {};
+      const calendarUpdate = { type: "booking" };
       if (start_date) {
         calendarUpdate.event_date = extractDate(newStart);
         calendarUpdate.start_time = extractTime(newStart, "09:00:00");
