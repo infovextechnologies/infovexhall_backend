@@ -12,6 +12,7 @@ const {
   getInvoices,
   updateInvoiceStatus,
   getInvoiceDto,
+  getInvoiceDtoPublic,
   getReceiptDto,
   deleteInvoice,
   exportGstr1Report,
@@ -36,6 +37,7 @@ router.patch("/:id/sync", ...hasPermission("create_payments"), updateInvoiceStat
 router.delete("/:id", ...hasPermission("delete_bookings"), deleteInvoice);
 
 // ---- Document DTO Endpoints ----
+router.get("/:id/public", getInvoiceDtoPublic); // Public route WITHOUT authentication
 router.get("/:id/dto", ...hasPermission("view_payments"), getInvoiceDto);
 router.get("/receipt/:payment_id/dto", ...hasPermission("view_payments"), getReceiptDto);
 

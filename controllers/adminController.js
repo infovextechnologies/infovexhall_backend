@@ -112,7 +112,7 @@ const createHall = async (req, res) => {
   const packageSetupFee = parseFloat(pkg?.setup_fee || 0);
   const setupFee = setup_fee_amount !== undefined ? parseFloat(setup_fee_amount) : packageSetupFee;
   const amtPaid = amount_paid !== undefined ? parseFloat(amount_paid) : 0;
-  
+
   let status = "unpaid";
   if (setup_fee_status) {
     status = setup_fee_status;
@@ -402,8 +402,8 @@ const getAdminDashboardStats = async (req, res) => {
       type: act.action?.includes("signup") || act.action?.includes("register")
         ? "hall_signup"
         : act.action?.includes("payment")
-        ? "payment_received"
-        : "activity",
+          ? "payment_received"
+          : "activity",
       title: act.action || "System Log",
       description: act.description || "",
       timestamp: act.created_at,
@@ -596,8 +596,8 @@ const getAdminAnalytics = async (req, res) => {
         conversionRate:
           cityCounts[city] > 0
             ? parseFloat(
-                (((activePaidByCity[city] || 0) / cityCounts[city]) * 100).toFixed(1)
-              )
+              (((activePaidByCity[city] || 0) / cityCounts[city]) * 100).toFixed(1)
+            )
             : 0,
         mrr: mrrByCity[city] || 0,
       }))
@@ -756,11 +756,10 @@ const getHallActivity = async (req, res) => {
           s.status === "active"
             ? "Subscription Activated"
             : s.status === "trial"
-            ? "Setup Mode Activated"
-            : `Subscription ${s.status.charAt(0).toUpperCase() + s.status.slice(1)}`,
-        description: `Package: ${s.packages?.name || "Onboarding Setup"} — Valid till ${
-          s.end_date ? new Date(s.end_date).toLocaleDateString("en-GB") : "N/A"
-        }`,
+              ? "Setup Mode Activated"
+              : `Subscription ${s.status.charAt(0).toUpperCase() + s.status.slice(1)}`,
+        description: `Package: ${s.packages?.name || "Onboarding Setup"} — Valid till ${s.end_date ? new Date(s.end_date).toLocaleDateString("en-GB") : "N/A"
+          }`,
         timestamp: s.created_at,
         actor: "System Admin",
         type: "subscription",
@@ -1676,12 +1675,12 @@ const generateCustomAdminInvoice = async (req, res) => {
     if (taxEnabled) {
       taxRows = `
         <tr>
-          <td style="padding: 6px 0; color: #64748b;">CGST (${taxRatePercent / 2}%):</td>
-          <td style="padding: 6px 0; text-align: right; font-family: monospace; color: #334155; font-weight: 600;">${fmt(cgst)}</td>
+          <td style="padding: 6px 6px; color: #64748b;">CGST (${taxRatePercent / 2}%):</td>
+          <td style="padding: 6px 6px; text-align: right; font-family: monospace; color: #334155; font-weight: 600;">${fmt(cgst)}</td>
         </tr>
         <tr>
-          <td style="padding: 6px 0; color: #64748b;">SGST (${taxRatePercent / 2}%):</td>
-          <td style="padding: 6px 0; text-align: right; font-family: monospace; color: #334155; font-weight: 600;">${fmt(sgst)}</td>
+          <td style="padding: 6px 6px; color: #64748b;">SGST (${taxRatePercent / 2}%):</td>
+          <td style="padding: 6px 6px; text-align: right; font-family: monospace; color: #334155; font-weight: 600;">${fmt(sgst)}</td>
         </tr>
       `;
     }
@@ -2040,14 +2039,14 @@ const generateCustomAdminInvoice = async (req, res) => {
             ${dueDateFormatted ? `<div>Due Date: <strong>${dueDateFormatted}</strong></div>` : ""}
             <div class="status-badge-container">
               ${(() => {
-                if (balDueVal <= 0) {
-                  return '<span class="status-badge-paid">Paid</span>';
-                } else if (amtPaidVal > 0) {
-                  return '<span class="status-badge-partial">Partially Paid</span>';
-                } else {
-                  return '<span class="status-badge-unpaid">Unpaid</span>';
-                }
-              })()}
+        if (balDueVal <= 0) {
+          return '<span class="status-badge-paid">Paid</span>';
+        } else if (amtPaidVal > 0) {
+          return '<span class="status-badge-partial">Partially Paid</span>';
+        } else {
+          return '<span class="status-badge-unpaid">Unpaid</span>';
+        }
+      })()}
             </div>
           </div>
         </td>
@@ -2098,7 +2097,7 @@ const generateCustomAdminInvoice = async (req, res) => {
 
     <table style="width: 100%; border-collapse: collapse;">
       <tr>
-        <td style="width: 52%; vertical-align: top;">
+        <td style="width: 50%; vertical-align: top; padding-right: 24px;">
           <div class="payment-info-card">
             <div class="payment-info-title">Transaction & Remittance Details</div>
             <div style="margin-bottom: 4px;">Payment Method: <strong style="text-transform: uppercase; color: #0f172a;">${payment_method.replace('_', ' ')}</strong></div>
@@ -2142,8 +2141,26 @@ const generateCustomAdminInvoice = async (req, res) => {
 </html>
     `;
 
-    res.setHeader("Content-Type", "text/html");
-    res.send(htmlContent);
+    const crypto = require("crypto");
+    const invoiceId = crypto.randomUUID();
+
+    // Save to Supabase Storage Bucket
+    const { error: storageError } = await supabaseAdmin.storage
+      .from("custom_invoices")
+      .upload(`${invoiceId}.html`, htmlContent, {
+        contentType: "text/html",
+        upsert: true
+      });
+
+    if (storageError) {
+      console.error("Storage error:", storageError);
+    }
+
+    res.json({
+      id: invoiceId,
+      hallName: hallName,
+      htmlContent: htmlContent
+    });
   } catch (err) {
     console.error("generateCustomAdminInvoice error:", err);
     res.status(500).send("<h3>Internal Server Error</h3>");
@@ -2347,7 +2364,7 @@ const exportSaaSgstr1Report = async (req, res) => {
         .from("hall_profiles")
         .select("hall_id, gst_number, state")
         .in("hall_id", hallIds);
-      
+
       (profiles || []).forEach(p => {
         profilesMap[p.hall_id] = p;
       });
@@ -2362,7 +2379,7 @@ const exportSaaSgstr1Report = async (req, res) => {
       const profile = profilesMap[pay.hall_id];
       const customerGstin = profile?.gst_number || "URP";
       const totalVal = parseFloat(pay.amount) || 0;
-      
+
       const taxEnabled = pay.tax_enabled !== false;
       const subtotalVal = taxEnabled ? Math.round((totalVal / 1.18) * 100) / 100 : totalVal;
       const taxAmount = taxEnabled ? Math.round((totalVal - subtotalVal) * 100) / 100 : 0;

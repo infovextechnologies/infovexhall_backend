@@ -399,6 +399,7 @@ const getInvoiceDto = async (req, res) => {
       .order("payment_date", { ascending: true });
 
     const dto = {
+      id: invoice.id,
       documentType: "invoice",
       documentNumber: invoice.invoice_number,
       issueDate: invoice.invoice_date,
@@ -468,6 +469,110 @@ const getInvoiceDto = async (req, res) => {
 };
 
 /* ============================================================
+   GET INVOICE DOCUMENT DTO (PUBLIC - NO AUTH REQUIRED)
+   ============================================================ */
+const getInvoiceDtoPublic = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: invoice, error } = await supabaseAdmin
+      .from("invoices")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (error || !invoice) {
+      return res.status(404).json({ message: "Invoice not found or invalid link" });
+    }
+
+    const hall_id = invoice.hall_id;
+
+    const { data: profile } = await supabaseAdmin
+      .from("hall_profiles")
+      .select("hall_name, phone, email, address, city, state, logo_url, gstin, bank_name, account_number, ifsc_code, upi_id")
+      .eq("hall_id", hall_id)
+      .maybeSingle();
+
+    const settings = await getSettingsForHall(hall_id);
+
+    const { data: payments } = await supabaseAdmin
+      .from("payments")
+      .select("id, amount, payment_method, payment_date, notes")
+      .eq("booking_id", invoice.booking_id)
+      .eq("hall_id", hall_id)
+      .order("payment_date", { ascending: true });
+
+    const dto = {
+      id: invoice.id,
+      documentType: "invoice",
+      documentNumber: invoice.invoice_number,
+      issueDate: invoice.invoice_date,
+      dueDate: invoice.due_date,
+      status: invoice.status,
+      customer: {
+        name: invoice.customer_name || "",
+        phone: invoice.customer_phone || "",
+        email: invoice.customer_email || "",
+        address: invoice.customer_address || "",
+      },
+      hall: {
+        name: profile?.hall_name || invoice.hall_name || "",
+        phone: profile?.phone || invoice.hall_phone || "",
+        email: profile?.email || invoice.hall_email || "",
+        address: profile?.address ? `${profile.address}, ${profile.city || ""}` : (invoice.hall_address || ""),
+        logoUrl: profile?.logo_url || invoice.hall_logo_url || null,
+        gstin: profile?.gstin || invoice.hall_gstin || null,
+        bankName: profile?.bank_name || "",
+        bankAccount: profile?.account_number || "",
+        bankIfsc: profile?.ifsc_code || "",
+        bankBranch: "",
+        upiId: profile?.upi_id || "",
+        notes: invoice.notes || settings.invoice_footer_note || "",
+      },
+      items: (invoice.line_items || []).map(item => ({
+        description: item.description || "Hall Booking Service",
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unit_price || 0),
+        total: Number(item.quantity || 1) * Number(item.unit_price || 0),
+      })),
+      financials: {
+        subtotal: Number(invoice.subtotal || 0),
+        discountAmount: Number(invoice.discount_amount || 0),
+        taxEnabled: Boolean(invoice.tax_enabled),
+        taxPercentage: Number(invoice.tax_percentage || 0),
+        taxLabel: invoice.tax_label || "GST",
+        taxAmount: Number(invoice.tax_amount || 0),
+        totalAmount: Number(invoice.total_amount || 0),
+        amountPaid: Number(invoice.amount_paid || 0),
+        balanceDue: Number(invoice.balance_due || 0),
+        currencySymbol: invoice.currency_symbol || settings.currency_symbol || "₹",
+      },
+      payments: (payments || []).map(p => {
+        let transactionId = null;
+        if (p.notes) {
+          const match = p.notes.match(/(?:Ref|UTR):\s*([A-Za-z0-9_-]+)/i) || p.notes.match(/\(Ref:\s*([A-Za-z0-9_-]+)\)/i);
+          if (match) transactionId = match[1];
+        }
+        return {
+          id: p.id,
+          amount: Number(p.amount || 0),
+          paymentMethod: p.payment_method || "cash",
+          paymentDate: p.payment_date,
+          transactionId: transactionId,
+        };
+      }),
+      invoiceTemplate: settings.invoice_template || "classic",
+      receiptTemplate: settings.booking_settings?.receiptTemplate || settings.invoice_template || "classic",
+    };
+
+    res.json(dto);
+  } catch (err) {
+    console.error("getInvoiceDtoPublic error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+/* ============================================================
    GET PAYMENT RECEIPT DTO
    ============================================================ */
 const getReceiptDto = async (req, res) => {
@@ -514,6 +619,7 @@ const getReceiptDto = async (req, res) => {
     const balanceDue = Math.max(0, Number(payment.bookings?.total_amount || 0) - totalPaid);
 
     const dto = {
+      id: payment.id,
       documentType: "receipt",
       documentNumber: receiptNumber,
       issueDate: payment.payment_date,
@@ -720,6 +826,7 @@ module.exports = {
   getInvoices,
   updateInvoiceStatus,
   getInvoiceDto,
+  getInvoiceDtoPublic,
   getReceiptDto,
   deleteInvoice,
   exportGstr1Report,
